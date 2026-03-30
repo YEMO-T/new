@@ -1,0 +1,5 @@
+{
+  "name": "豆沙包教师助手",
+  "description": "基于 Gemini 3.0 的多模态 AI 教学智能体。支持对话式备课、手绘草图识别、知识库管理及多格式课件导出，全方位赋能教育者。",
+  "requestFramePermissions": ["camera", "microphone"]
+}

@@ -1,0 +1,85 @@
+/* ========== 保存课件按钮 ========== */
+.save-courseware-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  border-radius: 6px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  font-family: inherit;
+}
+
+.save-courseware-btn:hover {
+  transform: translateY(-2px);
+}
+
+/* ========== 按钮尺寸 ========== */
+.save-courseware-btn.btn-small {
+  padding: 6px 12px;
+  font-size: 12px;
+}
+
+.save-courseware-btn.btn-medium {
+  padding: 8px 16px;
+  font-size: 14px;
+}
+
+.save-courseware-btn.btn-large {
+  padding: 12px 24px;
+  font-size: 16px;
+}
+
+/* ========== 按钮变体 ========== */
+.save-courseware-btn.btn-primary {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+}
+
+.save-courseware-btn.btn-primary:hover {
+  box-shadow: 0 6px 20px rgba(102, 126, 234, 0.6);
+}
+
+.save-courseware-btn.btn-secondary {
+  background: #f5f7fa;
+  color: #667eea;
+  border: 2px solid #e0e6ed;
+}
+
+.save-courseware-btn.btn-secondary:hover {
+  background: #ecf0f1;
+  border-color: #667eea;
+}
+
+.save-courseware-btn.btn-inline {
+  background: transparent;
+  color: #667eea;
+  padding: 4px 8px;
+}
+
+.save-courseware-btn.btn-inline:hover {
+  background: #f5f7fa;
+}
+
+/* ========== 图标 ========== */
+.save-courseware-btn .icon {
+  display: inline-block;
+  font-size: 1.1em;
+}
+
+.save-courseware-btn .label {
+  display: inline-block;
+}
+
+/* ========== 响应式隐藏文本 ========== */
+@media (max-width: 600px) {
+  .save-courseware-btn.btn-medium .label {
+    display: none;
+  }
+
+  .save-courseware-btn.btn-large .label {
+    display: inline-block;
+  }
+}

@@ -1,0 +1,14 @@
+fastapi
+uvicorn
+pydantic[email]
+python-dotenv
+openai
+supabase>=2.0.0
+python-pptx
+python-docx
+PyJWT
+bcrypt
+qianfan
+PyPDF2
+sentence-transformers>=2.2.0
+numpy>=1.21.0
