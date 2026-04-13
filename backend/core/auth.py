@@ -43,3 +43,15 @@ def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)) 
 def get_current_user(user_id: str = Depends(verify_token)) -> str:
     """依赖注入：获取当前用户 ID"""
     return user_id
+
+async def get_current_user_optional(credentials: HTTPAuthorizationCredentials = Depends(security)) -> str | None:
+    """依赖注入：可选获取当前用户 ID，无 token 时返回 None"""
+    if not credentials:
+        return None
+    token = credentials.credentials
+    try:
+        payload = jwt.decode(token, settings.JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
+        user_id: str = payload.get("sub")
+        return user_id
+    except (jwt.ExpiredSignatureError, jwt.InvalidTokenError):
+        return None

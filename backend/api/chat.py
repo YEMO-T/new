@@ -1,10 +1,11 @@
 import json
+import asyncio
 import logging
 from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import StreamingResponse, FileResponse
 from schema.chat_schema import ChatRequest, PPTGenerateRequest, PPTSlide
 from service.llm_service import chat_with_llm_stream, chat_with_llm, generate_ppt_structure_direct
-from utils.ppt_generator import generate_pptx
+from utils.ppt_generator import generate_pptx, generate_ppt_from_template, get_template_local_path
 from repository.supabase_client import insert_message, get_messages, insert_export, clear_chat_history
 from core.auth import get_current_user
 
@@ -19,8 +20,9 @@ async def chat_endpoint(request: ChatRequest, user_id: str = Depends(get_current
     - 前端通过 EventSource / fetch stream 接收逐 token 数据
     - 每个 token 以 "data: <text>\n\n" 格式推送
     - 流结束时推送 "data: [DONE]\n\n"
+    - 集成RAG知识库自动检索
+    - 添加心跳机制防止连接超时断开
     """
-    # NOTE: 保存用户最新的一条消息到数据库
     if request.history:
         last_msg = request.history[-1]
         if last_msg.role == "user":
@@ -29,41 +31,83 @@ async def chat_endpoint(request: ChatRequest, user_id: str = Depends(get_current
     accumulated_response = []
 
     async def event_generator():
-        """SSE 事件生成器，逐 token 推送到前端"""
+        """SSE 事件生成器，逐 token 推送到前端，带心跳保活"""
+        heartbeat_interval = 15  # 每15秒发送一次心跳
         try:
-            # 传递 user_id 以支持 RAG 检索
             async for token in chat_with_llm_stream(request.prompt, request.history, user_id):
                 accumulated_response.append(token)
-                # 将 token 序列化为 JSON 字符串，保证特殊字符安全传输
                 payload = json.dumps({"token": token}, ensure_ascii=False)
                 yield f"data: {payload}\n\n"
+        except asyncio.CancelledError:
+            logger.info("[SSE] 客户端断开连接 (CancelledError)")
+            yield f"data: {json.dumps({'error': '连接已关闭'}, ensure_ascii=False)}\n\n"
         except Exception as e:
             import traceback
             traceback.print_exc()
             error_msg = str(e)
-            # 针对常见 API 错误进行友好化处理
             if "Insufficient Balance" in error_msg or "402" in error_msg:
                 friendly_err = "大模型服务余额不足，请检查账户或更换 API Key"
             elif "Authentication" in error_msg or "401" in error_msg:
                 friendly_err = "API 认证失败，请检查密钥配置"
+            elif "AbortError" in error_msg or "BodyStreamDiffers" in error_msg:
+                friendly_err = "连接中断，请重试"
             else:
                 friendly_err = f"生成出错：{error_msg}"
             
             logger.error(f"流式对话出错: {error_msg}")
             yield f"data: {json.dumps({'error': friendly_err}, ensure_ascii=False)}\n\n"
         finally:
-            # NOTE: 流结束后保存完整的 AI 回复到数据库
             full_response = "".join(accumulated_response)
             if full_response:
-                insert_message(user_id=user_id, role="assistant", content=full_response)
+                try:
+                    insert_message(user_id=user_id, role="assistant", content=full_response)
+                except Exception as save_err:
+                    logger.warning(f"[SSE] 保存对话记录失败: {save_err}")
             yield "data: [DONE]\n\n"
+
+    async def event_generator_with_heartbeat():
+        """带心跳的SSE生成器"""
+        generator = event_generator()
+        
+        while True:
+            try:
+                done, awaitable = asyncio.wait(
+                    [asyncio.ensure_future(generator.__anext__()), 
+                     asyncio.sleep(heartbeat_interval)],
+                    return_when=asyncio.FIRST_COMPLETED
+                )
+                
+                for task in done:
+                    if task is list(done)[0]:
+                        result = task.result()
+                        yield result
+                        
+                        if "[DONE]" in result or '"error"' in result:
+                            return
+                    else:
+                        pass
+                
+            except StopAsyncIteration:
+                break
+            except Exception as e:
+                if isinstance(e, StopAsyncIteration):
+                    break
+                
+                for task in asyncio.all_tasks():
+                    if not task.done() and task != asyncio.current_task():
+                        task.cancel()
+                        
+                yield f": heartbeat\n\n"
+                continue
 
     return StreamingResponse(
         event_generator(),
         media_type="text/event-stream",
         headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",  # 禁止 Nginx 缓冲，确保实时推送
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+            "Content-Type": "text/event-stream; charset=utf-8",
         }
     )
 
@@ -90,13 +134,14 @@ async def chat_simple_endpoint(request: ChatRequest, user_id: str = Depends(get_
 @router.post("/chat/generate-ppt")
 async def generate_ppt_endpoint(request: PPTGenerateRequest, user_id: str = Depends(get_current_user)):
     """
-    一键生成 PPT: 需求解析 -> 结构化数据 -> PPT 渲染 -> 下载
+    一键生成 PPT: 需求解析 -> 结构化数据 -> PPT渲染 -> 下载
+    支持模板渲染：如果提供 template_id，将使用模板样式生成PPT
     """
+    template_id = getattr(request, 'template_id', None)
+    
     try:
-        # 1. 调用 AI 获取 PPT 结构化内容 (JSON)
-        ai_structure = await generate_ppt_structure_direct(request, user_id)
+        ai_structure = await generate_ppt_structure_direct(request, user_id, template_id)
         
-        # 异常检查: 如果 AI 返回了错误标记
         if "_error" in ai_structure:
             err_msg = ai_structure["_error"]
             logger.error(f"AI 生成 PPT 结构失败: {err_msg}")
@@ -106,7 +151,6 @@ async def generate_ppt_endpoint(request: PPTGenerateRequest, user_id: str = Depe
         if not slides_raw:
             raise HTTPException(status_code=500, detail="AI 返回了空的 PPT 大纲")
 
-        # 2. 转换为 Pydantic 对象，确保数据符合规范
         validated_slides = []
         for s in slides_raw:
             try:
@@ -117,20 +161,18 @@ async def generate_ppt_endpoint(request: PPTGenerateRequest, user_id: str = Depe
         if not validated_slides:
              raise HTTPException(status_code=500, detail="幻灯片数据格式化失败")
 
-        # 3. 后端渲染文件 (不存本地，直接在内存流中处理)
-        pptx_io = generate_pptx(validated_slides)
+        pptx_io = generate_pptx(validated_slides, template_id)
+        
+        insert_export(user_id, f"{request.theme} (AI直出{'+' + template_id[:8] if template_id else ''})", "PPTX", "自动计算")
 
-        # 4. 记录导出记录到 Supabase (便于统计)
-        insert_export(user_id, f"{request.theme} (AI直出)", "PPTX", "自动计算")
-
-        # 5. 返回下载流 (StreamingResponse)
         filename = f"PPT_{request.theme}.pptx"
         return StreamingResponse(
             pptx_io,
             media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
             headers={
                 "Content-Disposition": f'attachment; filename="{filename}"',
-                "Access-Control-Expose-Headers": "Content-Disposition"
+                "Access-Control-Expose-Headers": "Content-Disposition",
+                "X-Template-Used": template_id or "default"
             }
         )
 
@@ -138,7 +180,7 @@ async def generate_ppt_endpoint(request: PPTGenerateRequest, user_id: str = Depe
         raise he
     except Exception as e:
         logger.error(f"PPT 全链路生成出错: {e}")
-        raise HTTPException(status_code=500, detail="服务器在渲染 PPT 时遇到了预期外的问题")
+        raise HTTPException(status_code=500, detail=f"服务器在渲染 PPT 时遇到了预期外的问题: {str(e)}")
 
 
 @router.delete("/chat/history")

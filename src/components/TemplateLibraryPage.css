@@ -719,3 +719,307 @@
     padding: 2px 6px;
   }
 }
+
+/* ========== Toast 提示 ========== */
+.toast {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  padding: 12px 24px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  z-index: 2000;
+  animation: slideInRight 0.3s ease, fadeOut 0.3s ease 2.7s;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.toast.success {
+  background: #27ae60;
+  color: white;
+}
+
+.toast.error {
+  background: #e74c3c;
+  color: white;
+}
+
+@keyframes slideInRight {
+  from {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+@keyframes fadeOut {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+/* ========== 分页 ========== */
+.pagination {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 16px;
+  margin-top: 30px;
+  padding: 20px;
+  background: white;
+  border-radius: 12px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.page-btn {
+  padding: 10px 20px;
+  border: 2px solid #667eea;
+  background: white;
+  color: #667eea;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.page-btn:hover:not(:disabled) {
+  background: #667eea;
+  color: white;
+}
+
+.page-btn:disabled {
+  border-color: #e0e6ed;
+  color: #bdc3c7;
+  cursor: not-allowed;
+}
+
+.page-info {
+  font-size: 14px;
+  color: #7f8c8d;
+}
+
+/* ========== 删除确认按钮 ========== */
+.action-btn.delete.confirm {
+  background: #e74c3c !important;
+  color: white !important;
+  animation: pulse 0.5s ease infinite;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.1);
+  }
+}
+
+/* ========== 加载动画 ========== */
+.spinner {
+  width: 40px;
+  height: 40px;
+  border: 3px solid #e0e6ed;
+  border-top-color: #667eea;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+  margin: 0 auto 16px;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ========== 文件显示 ========== */
+.file-display {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.file-display .file-icon {
+  font-size: 20px;
+}
+
+.file-display .file-size {
+  color: #95a5a6;
+  font-size: 12px;
+}
+
+.file-input-wrapper.drag-over {
+  border-color: #667eea;
+  background: #f0f4ff;
+}
+
+/* ========== 文件名显示 ========== */
+.placeholder .file-name {
+  position: absolute;
+  bottom: 10px;
+  left: 10px;
+  right: 10px;
+  font-size: 12px;
+  color: #95a5a6;
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ========== 文件大小标签 ========== */
+.file-size {
+  font-size: 12px;
+  color: #95a5a6;
+  margin-top: 4px;
+}
+
+/* ========== 搜索按钮 ========== */
+.search-btn {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: #667eea;
+  border: none;
+  border-radius: 6px;
+  padding: 8px 12px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.search-btn:hover {
+  background: #5568d3;
+}
+
+/* ========== 空状态优化 ========== */
+.empty-icon {
+  font-size: 64px !important;
+  margin-bottom: 16px !important;
+}
+
+.empty-text {
+  font-size: 18px !important;
+  color: #7f8c8d !important;
+  margin-bottom: 20px !important;
+}
+
+/* ========== 预览模态框 ========== */
+.preview-modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.preview-modal {
+  background: white;
+  border-radius: 12px;
+  width: 90%;
+  max-width: 600px;
+  max-height: 80vh;
+  overflow-y: auto;
+}
+
+.preview-content {
+  padding: 20px;
+}
+
+.preview-info p {
+  margin: 0 0 12px 0;
+  font-size: 14px;
+  color: #2c3e50;
+}
+
+.preview-info strong {
+  color: #7f8c8d;
+}
+
+.preview-actions {
+  margin-top: 20px;
+  padding-top: 20px;
+  border-top: 1px solid #ecf0f1;
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* ========== 下载按钮 ========== */
+.action-btn.download:hover {
+  background: #3498db;
+  color: white;
+}
+
+/* ========== SupabaseImage 组件样式 ========== */
+.supabase-image-loading {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #e0e6ed 0%, #f5f7fa 100%);
+}
+
+.supabase-image-loading .loading-spinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid #e0e6ed;
+  border-top-color: #667eea;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+.supabase-image-error {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #e0e6ed 0%, #f5f7fa 100%);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.supabase-image-error:hover {
+  background: linear-gradient(135deg, #d5dce5 0%, #e8ecf0 100%);
+}
+
+.supabase-image-error .error-icon {
+  font-size: 48px;
+  margin-bottom: 8px;
+}
+
+.supabase-image-error .error-text {
+  font-size: 12px;
+  color: #95a5a6;
+}
+
+.supabase-image,
+.template-thumbnail {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}

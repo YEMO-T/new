@@ -61,23 +61,31 @@ export interface Template {
 // PPT模板库新类型
 export interface PPTTemplate {
   id: string;
-  userId: string;
+  user_id?: string;
+  userId?: string;
   title: string;
   description: string;
   category: string;
-  sourceType: 'upload' | 'saved_courseware';
+  sourceType?: 'upload' | 'saved_courseware';
   visibility: 'private' | 'public';
-  thumbnail: string;
+  thumbnail?: string;
   usageCount: number;
-  isFavorite: boolean;
+  isFavorite?: boolean;
   createdAt: string;
-  updatedAt: string;
+  updatedAt?: string;
+  originalFileName?: string;
+  originalFileSize?: string;
   templateData?: {
     slidesStructure: any[];
     themeColors: Record<string, string>;
     fonts: Record<string, any>;
     placeholders: Record<string, any>;
   };
+  themeColors?: Record<string, string>;
+  fonts?: Record<string, any>;
+  has_original_file?: boolean;
+  file_path?: string;
+  file_bucket?: string;
 }
 
 export interface GenerateCoursewareRequest {

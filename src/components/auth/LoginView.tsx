@@ -2,7 +2,8 @@ import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { LogIn, UserPlus, X, Eye, EyeOff, Mail, Lock, User, CheckCircle2, AlertCircle, ArrowRight, Sparkles } from 'lucide-react';
 import { cn } from '../../lib/utils';
-import { loginUser, registerUser, UserInfo } from '../../services/api';
+import { loginUser, registerUser } from '../../services/api';
+import { UserInfo } from '../../types';
 
 interface LoginViewProps {
   onLogin: (userInfo: UserInfo) => void;

@@ -1,12 +1,8 @@
 import React from 'react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import remarkMath from 'remark-math';
-import rehypeKatex from 'rehype-katex';
-import 'katex/dist/katex.min.css';
 import { Bot, FileText, User } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { Message } from '../../types';
+import SafeMarkdown from '../common/SafeMarkdown';
 
 interface ChatMessageProps {
   message: Message;
@@ -55,19 +51,15 @@ export const ChatMessage = ({ message, isLast, onGenerateConfirm, generateBtnLab
           )}
 
           {/* Markdown 内容渲染 */}
-          <div className={cn(
-            "prose prose-sm max-w-none break-words",
-            !isAssistant ? "prose-invert prose-p:text-white/90" : "prose-p:text-[#161d19]/80",
-            "prose-headings:font-black prose-headings:tracking-tight prose-strong:text-[#0d631b] prose-code:bg-black/5 prose-code:px-1 prose-code:rounded",
-            "prose-table:border prose-table:border-black/5 prose-th:bg-[#f4fbf4] prose-th:px-4 prose-th:py-2 prose-td:px-4 prose-td:py-2"
-          )}>
-            <ReactMarkdown 
-              remarkPlugins={[remarkGfm, remarkMath]} 
-              rehypePlugins={[rehypeKatex]}
-            >
-              {message.content}
-            </ReactMarkdown>
-          </div>
+          <SafeMarkdown
+            className={cn(
+              !isAssistant ? "prose-invert prose-p:text-white/90" : "prose-p:text-[#161d19]/80",
+              "prose-headings:font-black prose-headings:tracking-tight prose-strong:text-[#0d631b] prose-code:bg-black/5 prose-code:px-1 prose-code:rounded",
+              "prose-table:border prose-table:border-black/5 prose-th:bg-[#f4fbf4] prose-th:px-4 prose-th:py-2 prose-td:px-4 prose-td:py-2"
+            )}
+          >
+            {message.content}
+          </SafeMarkdown>
 
           {/* 生成确认交互区 (仅限 Assistant 且消息包含触发意图或作为特定组件参数) */}
           {isAssistant && isLast && onGenerateConfirm && !isGenerating && (

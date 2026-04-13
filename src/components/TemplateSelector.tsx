@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { PPTTemplate } from '../types';
 import { getMyTemplates, getPublicTemplates, getTemplateCategories } from '../services/api';
 import './TemplateSelector.css';
@@ -17,23 +17,18 @@ export const TemplateSelector: React.FC<TemplateSelectorProps> = ({ onSelect, on
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
   useEffect(() => {
+    const loadCategories = async () => {
+      try {
+        const data = await getTemplateCategories();
+        setCategories(data);
+      } catch (error) {
+        console.error('加载分类失败:', error);
+      }
+    };
     loadCategories();
   }, []);
 
-  useEffect(() => {
-    loadTemplates();
-  }, [activeTab, selectedCategory]);
-
-  const loadCategories = async () => {
-    try {
-      const data = await getTemplateCategories();
-      setCategories(data);
-    } catch (error) {
-      console.error('加载分类失败:', error);
-    }
-  };
-
-  const loadTemplates = async () => {
+  const loadTemplates = useCallback(async () => {
     setLoading(true);
     try {
       let data;
@@ -50,7 +45,11 @@ export const TemplateSelector: React.FC<TemplateSelectorProps> = ({ onSelect, on
     } finally {
       setLoading(false);
     }
-  };
+  }, [activeTab, selectedCategory]);
+
+  useEffect(() => {
+    loadTemplates();
+  }, [loadTemplates]);
 
   return (
     <div className="template-selector-modal">

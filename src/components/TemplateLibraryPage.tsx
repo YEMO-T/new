@@ -1,24 +1,25 @@
 import React, { useState, useEffect } from 'react';
 import { PPTTemplate } from '../types';
 import {
-  getMyTemplates,
-  getPublicTemplates,
-  getTemplateCategories,
-  deleteTemplate,
+  getPptTemplateList,
+  getPptTemplateById,
+  deletePptTemplate,
+  copyPptTemplate,
   uploadTemplate,
-  copyTemplate,
-  getTemplateById
+  getTemplateCategories
 } from '../services/api';
-import TemplatePreviewModal from './TemplatePreviewModal';
-import { TemplateFullPreview } from './templates/TemplateFullPreview';
+import { PPTSlidePreview } from './PPTSlidePreview';
+import { SupabaseImage } from './SupabaseImage';
 import './TemplateLibraryPage.css';
+
+const BASE_URL = process.env.REACT_APP_API_BASE_URL || 'http://localhost:8000/api';
 
 export interface TemplateLibraryPageProps {
   onSelectTemplate?: (template: PPTTemplate) => void;
 }
 
 export const TemplateLibraryPage: React.FC<TemplateLibraryPageProps> = ({ onSelectTemplate }) => {
-  const [activeTab, setActiveTab] = useState<'my' | 'public' | 'favorites'>('my');
+  const [activeTab, setActiveTab] = useState<'my' | 'public'>('my');
   const [templates, setTemplates] = useState<PPTTemplate[]>([]);
   const [categories, setCategories] = useState<any[]>([]);
   const [selectedCategory, setSelectedCategory] = useState<string>('');
@@ -28,7 +29,11 @@ export const TemplateLibraryPage: React.FC<TemplateLibraryPageProps> = ({ onSele
   const [uploading, setUploading] = useState(false);
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [previewTemplate, setPreviewTemplate] = useState<PPTTemplate | null>(null);
-  const [fullPreviewTemplate, setFullPreviewTemplate] = useState<PPTTemplate | null>(null);
+  const [showSlidePreview, setShowSlidePreview] = useState(false);
+  const [totalTemplates, setTotalTemplates] = useState(0);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
 
   useEffect(() => {
     loadCategories();
@@ -36,7 +41,12 @@ export const TemplateLibraryPage: React.FC<TemplateLibraryPageProps> = ({ onSele
 
   useEffect(() => {
     loadTemplates();
-  }, [activeTab, selectedCategory, sortBy]);
+  }, [activeTab, currentPage]);
+
+  const showToast = (message: string, type: 'success' | 'error' = 'success') => {
+    setToast({ message, type });
+    setTimeout(() => setToast(null), 3000);
+  };
 
   const loadCategories = async () => {
     try {
@@ -47,21 +57,40 @@ export const TemplateLibraryPage: React.FC<TemplateLibraryPageProps> = ({ onSele
     }
   };
 
-  const loadTemplates = async () => {
+  const [retryCount, setRetryCount] = useState(0);
+
+  const loadTemplates = async (retryAttempt = 0) => {
     setLoading(true);
     try {
-      let data: PPTTemplate[] = [];
+      const templateType = activeTab === 'my' ? 'personal' : 'public';
+      const result = await getPptTemplateList(templateType, currentPage, 20);
       
-      if (activeTab === 'my') {
-        data = await getMyTemplates(selectedCategory || undefined);
-      } else if (activeTab === 'public') {
-        data = await getPublicTemplates(selectedCategory || undefined);
-      } else {
-        // favorites - 待实现
-        data = await getMyTemplates(selectedCategory || undefined);
-      }
+      let data: PPTTemplate[] = result.templates.map((t: any) => ({
+        id: t.id,
+        user_id: t.user_id,
+        title: t.title || '',
+        description: t.description || '',
+        category: t.category || '',
+        visibility: t.visibility || 'private',
+        thumbnail: t.thumbnail_url,
+        usageCount: t.usage_count || 0,
+        createdAt: t.created_at,
+        updatedAt: t.updated_at,
+        originalFileName: t.original_file_name,
+        originalFileSize: t.original_file_size,
+        templateData: {
+          slidesStructure: t.slides_structure || [],
+          themeColors: t.theme_colors || {},
+          fonts: t.fonts || {},
+          placeholders: t.placeholders || {},
+        },
+        themeColors: t.theme_colors,
+        fonts: t.fonts,
+        has_original_file: t.has_original_file || false,
+        file_path: t.file_path,
+        file_bucket: t.file_bucket,
+      }));
 
-      // 应用搜索过滤
       if (searchQuery) {
         data = data.filter(t =>
           t.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -69,18 +98,30 @@ export const TemplateLibraryPage: React.FC<TemplateLibraryPageProps> = ({ onSele
         );
       }
 
-      // 应用排序
       if (sortBy === 'popular') {
         data.sort((a, b) => b.usageCount - a.usageCount);
       } else if (sortBy === 'name') {
         data.sort((a, b) => a.title.localeCompare(b.title));
-      } else {
-        data.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
       }
 
       setTemplates(data);
-    } catch (error) {
+      setTotalTemplates(result.total);
+      setRetryCount(0);
+    } catch (error: any) {
       console.error('加载模板失败:', error);
+      
+      const isConnectionError = error?.message?.includes('10054') || 
+                                error?.message?.includes('连接') ||
+                                error?.message?.includes('timeout');
+      
+      if (isConnectionError && retryAttempt < 3) {
+        showToast(`连接失败，正在重试 (${retryAttempt + 1}/3)...`, 'error');
+        setTimeout(() => loadTemplates(retryAttempt + 1), 2000 * (retryAttempt + 1));
+        return;
+      }
+      
+      showToast('加载模板失败，请稍后重试', 'error');
+      setRetryCount(retryAttempt + 1);
       setTemplates([]);
     } finally {
       setLoading(false);
@@ -99,45 +140,48 @@ export const TemplateLibraryPage: React.FC<TemplateLibraryPageProps> = ({ onSele
 
       await uploadTemplate(formData);
       setShowUploadModal(false);
+      showToast('模板上传成功！');
       loadTemplates();
     } catch (error) {
       console.error('上传失败:', error);
-      alert('上传失败: ' + (error instanceof Error ? error.message : '未知错误'));
+      showToast('上传失败: ' + (error instanceof Error ? error.message : '未知错误'), 'error');
     } finally {
       setUploading(false);
     }
   };
 
   const handleDelete = async (templateId: string) => {
-    if (!confirm('确定要删除此模板吗？')) return;
+    if (deleteConfirm !== templateId) {
+      setDeleteConfirm(templateId);
+      setTimeout(() => setDeleteConfirm(null), 3000);
+      return;
+    }
     
     try {
-      await deleteTemplate(templateId);
+      await deletePptTemplate(templateId);
+      showToast('模板已删除');
       loadTemplates();
     } catch (error) {
       console.error('删除失败:', error);
-      alert('删除失败');
+      showToast('删除失败: ' + (error instanceof Error ? error.message : '未知错误'), 'error');
     }
+    setDeleteConfirm(null);
   };
 
   const handleCopy = async (templateId: string) => {
     try {
-      await copyTemplate(templateId);
-      alert('模板已复制到个人库');
-      if (activeTab === 'public') {
-        loadTemplates();
-      }
+      await copyPptTemplate(templateId);
+      showToast('模板已复制到个人库');
     } catch (error) {
       console.error('复制失败:', error);
-      alert('复制失败');
+      showToast('复制失败: ' + (error instanceof Error ? error.message : '未知错误'), 'error');
     }
   };
 
   const handlePreview = async (templateId: string) => {
     try {
-      const detail = await getTemplateById(templateId);
+      const detail = await getPptTemplateById(templateId);
       if (detail) {
-        // 将后端返回的数据结构映射为前端 PPTTemplate 包含 templateData
         const mapped: PPTTemplate = {
           ...detail,
           templateData: {
@@ -147,19 +191,41 @@ export const TemplateLibraryPage: React.FC<TemplateLibraryPageProps> = ({ onSele
             placeholders: detail.placeholders || {},
           }
         };
-        setFullPreviewTemplate(mapped);
+        setPreviewTemplate(mapped);
       }
     } catch (error) {
       console.error('获取模板详情失败:', error);
-      alert('无法加载模板预览');
+      showToast('无法加载模板预览', 'error');
     }
   };
 
-  const filteredTemplates = templates;
+  const handleDownload = (templateId: string, fileName: string) => {
+    const token = localStorage.getItem('auth_token');
+    const url = `${BASE_URL}/ppt-templates/${templateId}/download?token=${encodeURIComponent(token || '')}`;
+    
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = fileName || 'template.pptx';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    
+    showToast('开始下载...');
+  };
+
+  const handlePreviewFile = (template: PPTTemplate) => {
+    setPreviewTemplate(template);
+    setShowSlidePreview(true);
+  };
 
   return (
     <div className="template-library-page">
-      {/* 顶部导航 */}
+      {toast && (
+        <div className={`toast ${toast.type}`}>
+          {toast.message}
+        </div>
+      )}
+
       <div className="library-header">
         <h1>📚 模板库</h1>
         {activeTab === 'my' && (
@@ -169,29 +235,21 @@ export const TemplateLibraryPage: React.FC<TemplateLibraryPageProps> = ({ onSele
         )}
       </div>
 
-      {/* Tab 导航 */}
       <div className="library-tabs">
         <button
           className={`tab-btn ${activeTab === 'my' ? 'active' : ''}`}
-          onClick={() => setActiveTab('my')}
+          onClick={() => { setActiveTab('my'); setCurrentPage(1); }}
         >
-          我的模板
+          我的模板 ({activeTab === 'my' ? totalTemplates : ''})
         </button>
         <button
           className={`tab-btn ${activeTab === 'public' ? 'active' : ''}`}
-          onClick={() => setActiveTab('public')}
+          onClick={() => { setActiveTab('public'); setCurrentPage(1); }}
         >
-          公共模板
-        </button>
-        <button
-          className={`tab-btn ${activeTab === 'favorites' ? 'active' : ''}`}
-          onClick={() => setActiveTab('favorites')}
-        >
-          ⭐ 收藏
+          公共模板 ({activeTab === 'public' ? totalTemplates : ''})
         </button>
       </div>
 
-      {/* 搜索和过滤 */}
       <div className="library-controls">
         <div className="search-bar">
           <input
@@ -199,9 +257,10 @@ export const TemplateLibraryPage: React.FC<TemplateLibraryPageProps> = ({ onSele
             placeholder="搜索模板..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
+            onKeyPress={(e) => e.key === 'Enter' && loadTemplates()}
             className="search-input"
           />
-          <span className="search-icon">🔍</span>
+          <button className="search-btn" onClick={loadTemplates}>🔍</button>
         </div>
 
         <div className="filters">
@@ -214,69 +273,60 @@ export const TemplateLibraryPage: React.FC<TemplateLibraryPageProps> = ({ onSele
             <option value="popular">最热</option>
             <option value="name">名称</option>
           </select>
-
-          <div className="category-filter">
-            <button
-              className={`filter-pill ${selectedCategory === '' ? 'active' : ''}`}
-              onClick={() => setSelectedCategory('')}
-            >
-              全部
-            </button>
-            {categories.map(cat => (
-              <button
-                key={cat.id}
-                className={`filter-pill ${selectedCategory === cat.id ? 'active' : ''}`}
-                onClick={() => setSelectedCategory(cat.id)}
-              >
-                {cat.name}
-              </button>
-            ))}
-          </div>
         </div>
       </div>
 
-      {/* 模板网格 */}
       <div className="library-content">
         {loading ? (
           <div className="loading-state">
+            <div className="spinner"></div>
             <p>加载中...</p>
           </div>
-        ) : filteredTemplates.length > 0 ? (
-          <div className="template-grid">
-            {filteredTemplates.map(template => (
-              <div key={template.id} className="template-card-large">
-                {/* 缩略图 */}
-                <div className="thumbnail-container">
-                  {template.thumbnail ? (
-                    <img src={template.thumbnail} alt={template.title} />
-                  ) : (
-                    <div className="placeholder">
-                      <span>📄</span>
-                    </div>
-                  )}
-                  
-                  {/* 覆盖操作 */}
-                  <div className="card-overlay">
-                    <div className="card-actions">
-                      {activeTab === 'my' && (
-                        <>
-                          <button className="action-btn preview" title="预览" onClick={() => handlePreview(template.id)}>
-                            👁️
-                          </button>
+        ) : templates.length > 0 ? (
+          <>
+            <div className="template-grid">
+              {templates.map(template => (
+                <div key={template.id} className="template-card-large">
+                  <div className="thumbnail-container">
+                    <SupabaseImage
+                      src={template.thumbnail}
+                      alt={template.title}
+                      templateId={template.id}
+                      className="template-thumbnail"
+                      fallback={
+                        <div className="placeholder">
+                          <span>📄</span>
+                          <span className="file-name">{template.originalFileName || 'PPT模板'}</span>
+                        </div>
+                      }
+                    />
+                    
+                    <div className="card-overlay">
+                      <div className="card-actions">
+                        <button 
+                          className="action-btn preview" 
+                          title="预览PPT"
+                          onClick={() => handlePreviewFile(template)}
+                        >
+                          👁️
+                        </button>
+                        <button 
+                          className="action-btn download" 
+                          title="下载PPT"
+                          onClick={() => handleDownload(template.id, template.originalFileName || 'template.pptx')}
+                        >
+                          ⬇️
+                        </button>
+                        {activeTab === 'my' && (
                           <button 
-                            className="action-btn delete" 
-                            title="删除"
+                            className={`action-btn delete ${deleteConfirm === template.id ? 'confirm' : ''}`} 
+                            title={deleteConfirm === template.id ? '再次确认删除' : '删除'}
                             onClick={() => handleDelete(template.id)}
                           >
                             🗑️
                           </button>
-                        </>
-                      )}
-                      {activeTab === 'public' && (
-                        <>
-                          <button className="action-btn preview" title="预览" onClick={() => handlePreview(template.id)}>
-                            👁️
-                          </button>
+                        )}
+                        {activeTab === 'public' && (
                           <button 
                             className="action-btn copy" 
                             title="复制到个人库"
@@ -284,64 +334,86 @@ export const TemplateLibraryPage: React.FC<TemplateLibraryPageProps> = ({ onSele
                           >
                             📋
                           </button>
-                        </>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="template-badges">
+                      {template.category && (
+                        <span className="badge-category">{template.category}</span>
+                      )}
+                      {template.visibility === 'public' && (
+                        <span className="badge-public">公共</span>
                       )}
                     </div>
                   </div>
 
-                  {/* 标签 */}
-                  <div className="template-badges">
-                    <span className="badge-category">{template.category}</span>
-                    {template.visibility === 'public' && (
-                      <span className="badge-public">公共</span>
+                  <div className="card-info">
+                    <h3 title={template.title}>{template.title}</h3>
+                    <p className="description" title={template.description}>{template.description || '暂无描述'}</p>
+                    
+                    <div className="card-meta">
+                      <span className="usage">
+                        {template.usageCount > 0 ? `${template.usageCount} 次使用` : '新模板'}
+                      </span>
+                      <span className="date">
+                        {template.createdAt ? new Date(template.createdAt).toLocaleDateString('zh-CN') : ''}
+                      </span>
+                    </div>
+
+                    {template.originalFileSize && (
+                      <div className="file-size">
+                        文件大小: {template.originalFileSize}
+                      </div>
                     )}
                   </div>
-                </div>
 
-                {/* 信息区域 */}
-                <div className="card-info">
-                  <h3>{template.title}</h3>
-                  <p className="description">{template.description}</p>
-                  
-                  <div className="card-meta">
-                    <span className="usage">
-                      {template.usageCount > 0 ? `${template.usageCount}x` : '新'}
-                    </span>
-                    <span className="date">
-                      {new Date(template.createdAt).toLocaleDateString('zh-CN')}
-                    </span>
-                  </div>
-                </div>
-
-                {/* 快速操作 */}
-                <div className="card-footer">
-                  {activeTab === 'my' && (
+                  <div className="card-footer">
+                    <button 
+                      className="btn-small btn-secondary"
+                      onClick={() => handlePreviewFile(template)}
+                    >
+                      预览
+                    </button>
                     <button 
                       className="btn-small btn-primary"
                       onClick={() => onSelectTemplate?.(template)}
                     >
                       使用模板
                     </button>
-                  )}
-                  {activeTab === 'public' && (
-                    <>
-                      <button className="btn-small btn-secondary" onClick={() => handlePreview(template.id)}>预览</button>
-                      <button 
-                        className="btn-small btn-primary"
-                        onClick={() => onSelectTemplate?.(template)}
-                      >
-                        使用
-                      </button>
-                    </>
-                  )}
+                  </div>
                 </div>
+              ))}
+            </div>
+
+            {totalTemplates > 20 && (
+              <div className="pagination">
+                <button 
+                  className="page-btn"
+                  disabled={currentPage === 1}
+                  onClick={() => setCurrentPage(p => p - 1)}
+                >
+                  上一页
+                </button>
+                <span className="page-info">
+                  第 {currentPage} 页 / 共 {Math.ceil(totalTemplates / 20)} 页
+                </span>
+                <button 
+                  className="page-btn"
+                  disabled={currentPage * 20 >= totalTemplates}
+                  onClick={() => setCurrentPage(p => p + 1)}
+                >
+                  下一页
+                </button>
               </div>
-            ))}
-          </div>
+            )}
+          </>
         ) : (
           <div className="empty-state">
-            <p>📭</p>
-            <p>暂无模板</p>
+            <p className="empty-icon">📭</p>
+            <p className="empty-text">
+              {activeTab === 'my' ? '您还没有上传任何模板' : '暂无公共模板'}
+            </p>
             {activeTab === 'my' && (
               <button 
                 className="btn btn-primary"
@@ -354,7 +426,6 @@ export const TemplateLibraryPage: React.FC<TemplateLibraryPageProps> = ({ onSele
         )}
       </div>
 
-      {/* 上传模态框 */}
       {showUploadModal && (
         <UploadTemplateModal
           onClose={() => setShowUploadModal(false)}
@@ -363,26 +434,33 @@ export const TemplateLibraryPage: React.FC<TemplateLibraryPageProps> = ({ onSele
         />
       )}
 
-      {/* 模板全页面预览 */}
-      {fullPreviewTemplate && (
-        <TemplateFullPreview
-          template={fullPreviewTemplate}
-          onClose={() => setFullPreviewTemplate(null)}
-        />
-      )}
-
-      {/* 模板预览弹框 (保留作为快速查看，或在需要时切换) */}
       {previewTemplate && (
         <TemplatePreviewModal
           template={previewTemplate}
           onClose={() => setPreviewTemplate(null)}
         />
       )}
+
+      {showSlidePreview && previewTemplate && (
+        <PPTSlidePreview
+          templateId={previewTemplate.id}
+          token={localStorage.getItem('auth_token') || ''}
+          title={previewTemplate.title || previewTemplate.originalFileName || 'PPT预览'}
+          templateData={{
+            slidesStructure: previewTemplate.templateData?.slidesStructure || [],
+            themeColors: previewTemplate.themeColors || previewTemplate.templateData?.themeColors || {},
+            fonts: previewTemplate.fonts || previewTemplate.templateData?.fonts || {},
+          }}
+          onClose={() => {
+            setShowSlidePreview(false);
+            setPreviewTemplate(null);
+          }}
+        />
+      )}
     </div>
   );
 };
 
-// 上传模态框组件
 interface UploadTemplateModalProps {
   onClose: () => void;
   onUpload: (file: File, title: string, description: string, visibility: 'private' | 'public') => void;
@@ -398,6 +476,7 @@ const UploadTemplateModal: React.FC<UploadTemplateModalProps> = ({
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [visibility, setVisibility] = useState<'private' | 'public'>('private');
+  const [dragOver, setDragOver] = useState(false);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -406,6 +485,18 @@ const UploadTemplateModal: React.FC<UploadTemplateModalProps> = ({
       return;
     }
     onUpload(file, title, description, visibility);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setDragOver(false);
+    const droppedFile = e.dataTransfer.files[0];
+    if (droppedFile && droppedFile.name.toLowerCase().endsWith('.pptx')) {
+      setFile(droppedFile);
+      if (!title) {
+        setTitle(droppedFile.name.replace('.pptx', ''));
+      }
+    }
   };
 
   return (
@@ -417,21 +508,38 @@ const UploadTemplateModal: React.FC<UploadTemplateModalProps> = ({
         </div>
 
         <form onSubmit={handleSubmit} className="upload-form">
-          {/* 文件选择 */}
           <div className="form-group">
             <label>PPT文件 *</label>
-            <div className="file-input-wrapper">
+            <div 
+              className={`file-input-wrapper ${dragOver ? 'drag-over' : ''}`}
+              onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+              onDragLeave={() => setDragOver(false)}
+              onDrop={handleDrop}
+            >
               <input
                 type="file"
                 accept=".pptx"
-                onChange={(e) => setFile(e.target.files?.[0] || null)}
+                onChange={(e) => {
+                  const selectedFile = e.target.files?.[0];
+                  setFile(selectedFile || null);
+                  if (selectedFile && !title) {
+                    setTitle(selectedFile.name.replace('.pptx', ''));
+                  }
+                }}
                 disabled={loading}
               />
-              <span>{file?.name || '选择 .pptx 文件'}</span>
+              <span className="file-display">
+                {file ? (
+                  <>
+                    <span className="file-icon">📄</span>
+                    {file.name}
+                    <span className="file-size">({(file.size / 1024).toFixed(1)} KB)</span>
+                  </>
+                ) : '点击或拖拽 .pptx 文件到此处'}
+              </span>
             </div>
           </div>
 
-          {/* 标题 */}
           <div className="form-group">
             <label>模板标题 *</label>
             <input
@@ -443,7 +551,6 @@ const UploadTemplateModal: React.FC<UploadTemplateModalProps> = ({
             />
           </div>
 
-          {/* 描述 */}
           <div className="form-group">
             <label>描述</label>
             <textarea
@@ -455,7 +562,6 @@ const UploadTemplateModal: React.FC<UploadTemplateModalProps> = ({
             />
           </div>
 
-          {/* 可见范围 */}
           <div className="form-group">
             <label>可见范围</label>
             <div className="radio-group">
@@ -467,7 +573,7 @@ const UploadTemplateModal: React.FC<UploadTemplateModalProps> = ({
                   onChange={(e) => setVisibility(e.target.value as any)}
                   disabled={loading}
                 />
-                <span>个人专用（仅自己可见）</span>
+                <span>🔒 个人专用（仅自己可见）</span>
               </label>
               <label className="radio-option">
                 <input
@@ -477,12 +583,11 @@ const UploadTemplateModal: React.FC<UploadTemplateModalProps> = ({
                   onChange={(e) => setVisibility(e.target.value as any)}
                   disabled={loading}
                 />
-                <span>公共模板（所有用户可见）</span>
+                <span>🌐 公共模板（所有用户可见）</span>
               </label>
             </div>
           </div>
 
-          {/* 按钮 */}
           <div className="form-actions">
             <button 
               type="button" 
@@ -495,12 +600,41 @@ const UploadTemplateModal: React.FC<UploadTemplateModalProps> = ({
             <button 
               type="submit" 
               className="btn btn-primary"
-              disabled={loading || !file}
+              disabled={loading || !file || !title}
             >
               {loading ? '上传中...' : '上传模板'}
             </button>
           </div>
         </form>
+      </div>
+    </div>
+  );
+};
+
+interface TemplatePreviewModalProps {
+  template: PPTTemplate;
+  onClose: () => void;
+}
+
+const TemplatePreviewModal: React.FC<TemplatePreviewModalProps> = ({ template, onClose }) => {
+  return (
+    <div className="preview-modal-overlay" onClick={onClose}>
+      <div className="preview-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-header">
+          <h2>{template.title}</h2>
+          <button className="close-btn" onClick={onClose}>✕</button>
+        </div>
+        <div className="preview-content">
+          <div className="preview-info">
+            <p><strong>描述：</strong>{template.description || '暂无描述'}</p>
+            <p><strong>分类：</strong>{template.category || '未分类'}</p>
+            <p><strong>使用次数：</strong>{template.usageCount || 0}</p>
+            <p><strong>创建时间：</strong>{template.createdAt ? new Date(template.createdAt).toLocaleString('zh-CN') : ''}</p>
+          </div>
+          <div className="preview-actions">
+            <button className="btn btn-secondary" onClick={onClose}>关闭</button>
+          </div>
+        </div>
       </div>
     </div>
   );

@@ -1,9 +1,9 @@
 import React, { useState } from 'react';
 import { X, ChevronLeft, ChevronRight, Maximize2, Monitor } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import ReactMarkdown from 'react-markdown';
 import { cn } from '../../lib/utils';
 import { PPTTemplate } from '../../types';
+import SafeMarkdown from '../common/SafeMarkdown';
 
 interface TemplateFullPreviewProps {
   template: PPTTemplate;
@@ -100,7 +100,9 @@ export const TemplateFullPreview: React.FC<TemplateFullPreviewProps> = ({ templa
                 if (shape.text) {
                   return (
                     <div key={idx} className="text-lg text-gray-700 max-w-2xl text-left font-medium leading-relaxed mb-4">
-                      <ReactMarkdown>{shape.text}</ReactMarkdown>
+                      <SafeMarkdown>
+                        {shape.text}
+                      </SafeMarkdown>
                     </div>
                   );
                 }

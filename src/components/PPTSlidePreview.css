@@ -1,0 +1,441 @@
+.ppt-preview-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.9);
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: fadeIn 0.2s ease;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.ppt-preview-container {
+  width: 95vw;
+  height: 95vh;
+  max-width: 1400px;
+  background: #1a1a2e;
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+
+/* 顶部工具栏 */
+.ppt-preview-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 24px;
+  background: #16213e;
+  border-bottom: 1px solid #2a2a4a;
+}
+
+.preview-notice {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 24px;
+  background: linear-gradient(135deg, #f39c12 0%, #e67e22 100%);
+  color: white;
+  font-size: 14px;
+}
+
+.preview-notice .notice-icon {
+  font-size: 18px;
+}
+
+.preview-notice .notice-download {
+  margin-left: auto;
+  padding: 6px 16px;
+  background: rgba(255, 255, 255, 0.2);
+  color: white;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  transition: all 0.2s ease;
+}
+
+.preview-notice .notice-download:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.ppt-preview-header h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: #ffffff;
+  max-width: 400px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.slide-counter {
+  background: #667eea;
+  color: white;
+  padding: 4px 12px;
+  border-radius: 12px;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.preview-type-badge {
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 500;
+  margin-left: 8px;
+}
+
+.preview-type-badge.rendered {
+  background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
+  color: white;
+}
+
+.preview-type-badge.structure {
+  background: linear-gradient(135deg, #17a2b8 0%, #6f42c1 100%);
+  color: white;
+}
+
+.structure-notice {
+  background: linear-gradient(135deg, #17a2b8 0%, #6f42c1 100%) !important;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.toolbar-btn {
+  background: transparent;
+  border: 1px solid #3a3a5a;
+  color: #a0a0c0;
+  padding: 8px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 16px;
+  transition: all 0.2s ease;
+}
+
+.toolbar-btn:hover {
+  background: #2a2a4a;
+  color: #ffffff;
+  border-color: #667eea;
+}
+
+.close-btn {
+  background: transparent;
+  border: none;
+  color: #a0a0c0;
+  font-size: 24px;
+  cursor: pointer;
+  padding: 4px 8px;
+  transition: all 0.2s ease;
+}
+
+.close-btn:hover {
+  color: #ff6b6b;
+  transform: rotate(90deg);
+}
+
+/* 主内容区 */
+.ppt-preview-body {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+  position: relative;
+}
+
+/* 缩略图侧边栏 */
+.thumbnails-sidebar {
+  width: 180px;
+  background: #16213e;
+  border-right: 1px solid #2a2a4a;
+  overflow-y: auto;
+  padding: 12px;
+}
+
+.thumbnails-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.thumbnail-item {
+  cursor: pointer;
+  border: 2px solid transparent;
+  border-radius: 6px;
+  overflow: hidden;
+  transition: all 0.2s ease;
+  position: relative;
+}
+
+.thumbnail-item img {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.thumbnail-item span {
+  position: absolute;
+  bottom: 4px;
+  right: 4px;
+  background: rgba(0, 0, 0, 0.7);
+  color: white;
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+
+.thumbnail-item:hover {
+  border-color: #667eea;
+}
+
+.thumbnail-item.active {
+  border-color: #667eea;
+  box-shadow: 0 0 10px rgba(102, 126, 234, 0.5);
+}
+
+/* 幻灯片展示区 */
+.slide-display {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  overflow: hidden;
+}
+
+.slide-image-container {
+  max-width: 100%;
+  max-height: calc(95vh - 180px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #ffffff;
+  border-radius: 8px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
+  overflow: hidden;
+}
+
+.slide-image-container img {
+  max-width: 100%;
+  max-height: calc(95vh - 180px);
+  object-fit: contain;
+}
+
+.slide-info {
+  margin-top: 16px;
+  text-align: center;
+}
+
+.slide-info h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 500;
+  color: #a0a0c0;
+}
+
+/* 加载状态 */
+.loading-container,
+.error-container,
+.empty-container {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: #a0a0c0;
+}
+
+.spinner {
+  width: 50px;
+  height: 50px;
+  border: 3px solid #2a2a4a;
+  border-top-color: #667eea;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+  margin-bottom: 16px;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.error-container button {
+  margin-top: 16px;
+  padding: 10px 24px;
+  background: #667eea;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.error-container button:hover {
+  background: #5568d3;
+}
+
+.error-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.error-actions .download-btn {
+  background: #28a745;
+}
+
+.error-actions .download-btn:hover {
+  background: #218838;
+}
+
+.loading-hint {
+  font-size: 12px;
+  color: #888;
+  margin-top: 8px;
+}
+
+.empty-container button {
+  margin-top: 16px;
+  padding: 10px 24px;
+  background: #667eea;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.empty-container button:hover {
+  background: #5568d3;
+}
+
+/* 底部导航 */
+.ppt-preview-footer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 24px;
+  padding: 16px 24px;
+  background: #16213e;
+  border-top: 1px solid #2a2a4a;
+}
+
+.nav-btn {
+  padding: 10px 24px;
+  background: #667eea;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  transition: all 0.2s ease;
+  min-width: 120px;
+}
+
+.nav-btn:hover:not(:disabled) {
+  background: #5568d3;
+  transform: translateY(-2px);
+}
+
+.nav-btn:disabled {
+  background: #3a3a5a;
+  color: #6a6a8a;
+  cursor: not-allowed;
+}
+
+.progress-bar {
+  flex: 1;
+  max-width: 400px;
+  height: 4px;
+  background: #2a2a4a;
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #667eea, #764ba2);
+  transition: width 0.3s ease;
+}
+
+/* 快捷键提示 */
+.keyboard-hints {
+  position: absolute;
+  bottom: 80px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 16px;
+  background: rgba(0, 0, 0, 0.6);
+  padding: 8px 16px;
+  border-radius: 20px;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.ppt-preview-container:hover .keyboard-hints {
+  opacity: 1;
+}
+
+.keyboard-hints span {
+  font-size: 12px;
+  color: #a0a0c0;
+  padding: 4px 8px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+}
+
+/* 响应式 */
+@media (max-width: 768px) {
+  .ppt-preview-container {
+    width: 100vw;
+    height: 100vh;
+    border-radius: 0;
+  }
+
+  .ppt-preview-header {
+    padding: 12px 16px;
+  }
+
+  .ppt-preview-header h2 {
+    font-size: 16px;
+    max-width: 200px;
+  }
+
+  .thumbnails-sidebar {
+    width: 120px;
+    padding: 8px;
+  }
+
+  .nav-btn {
+    padding: 8px 16px;
+    font-size: 13px;
+    min-width: 100px;
+  }
+
+  .keyboard-hints {
+    display: none;
+  }
+}

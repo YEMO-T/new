@@ -2,17 +2,12 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import traceback
+import logging
 
-# 只导入必要的模块，避免sentence_transformers导入错误
-try:
-    from api import chat, coursewares, auth, knowledge, templates, exports, templates_v2, voice
-except Exception as e:
-    print(f"导入API模块失败: {e}")
-    traceback.print_exc()
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="豆沙包教师助手 API", version="1.0.0")
 
-# 允许前端跨域
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -22,13 +17,24 @@ app.add_middleware(
     expose_headers=["*"],
 )
 
-# ========== 健康检查接口 ==========
+@app.on_event("startup")
+async def startup_event():
+    """应用启动时预加载资源"""
+    logger.info("[STARTUP] 🚀 应用正在启动...")
+    
+    try:
+        from service.vector_service import preload_embedding_model
+        preload_embedding_model()
+        logger.info("[STARTUP] ✅ Embedding模型预加载完成")
+    except Exception as e:
+        logger.warning(f"[STARTUP] ⚠️ Embedding模型预加载失败（将在首次使用时加载）: {e}")
+    
+    logger.info("[STARTUP] ✅ 应用启动完成")
+
 @app.get("/api/health")
 async def health_check():
     return {"status": "ok", "message": "Backend service is running"}
-# =================================
 
-# ========== 全局异常捕获 ==========
 @app.exception_handler(Exception)
 async def catch_all_exceptions(request: Request, exc: Exception):
     traceback.print_exc()
@@ -36,21 +42,31 @@ async def catch_all_exceptions(request: Request, exc: Exception):
         status_code=500,
         content={"detail": f"服务器错误：{str(exc)}"}
     )
-# =================================
 
-# 注册路由
-try:
-    app.include_router(auth.router, prefix="/api/auth", tags=["Auth"])
-    app.include_router(chat.router, prefix="/api", tags=["Chat"])
-    app.include_router(coursewares.router, prefix="/api", tags=["Coursewares"])
-    app.include_router(knowledge.router, prefix="/api", tags=["Knowledge"])
-    app.include_router(templates.router, prefix="/api", tags=["Templates"])
-    app.include_router(templates_v2.router)
-    app.include_router(exports.router, prefix="/api", tags=["Exports"])
+from api import auth, chat, coursewares, knowledge, templates, templates_v2, exports, ppt_templates
+from api import voice
+from api import rag_knowledge, rag_chat, smart_answer
+from api import vectorization_health
+from api import ppt_generate
+
+app.include_router(auth.router, prefix="/api/auth", tags=["Auth"])
+app.include_router(chat.router, prefix="/api", tags=["Chat"])
+app.include_router(coursewares.router, prefix="/api", tags=["Coursewares"])
+app.include_router(knowledge.router, prefix="/api", tags=["Knowledge"])
+app.include_router(templates.router, prefix="/api", tags=["Templates"])
+app.include_router(templates_v2.router)
+app.include_router(exports.router, prefix="/api", tags=["Exports"])
+app.include_router(ppt_templates.router)
+app.include_router(ppt_generate.router)
+app.include_router(rag_knowledge.router, prefix="/api", tags=["RAG Knowledge"])
+app.include_router(rag_chat.router, prefix="/api", tags=["RAG Chat"])
+app.include_router(smart_answer.router, prefix="/api", tags=["Smart Answer"])
+app.include_router(vectorization_health.router, prefix="/api", tags=["Vectorization Health"])
+
+if voice is not None:
     app.include_router(voice.router, prefix="/api/voice", tags=["Voice"])
-except Exception as e:
-    print(f"注册路由失败: {e}")
-    traceback.print_exc()
+else:
+    logger.warning("voice 模块未加载，语音转文字功能不可用")
 
 @app.get("/")
 def read_root():

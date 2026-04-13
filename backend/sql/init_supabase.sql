@@ -1,74 +1,65 @@
--- 启用 UUID 扩展
+-- ============================================================
+-- 豆沙包教师助手 - 数据库初始化脚本
+-- ============================================================
+-- 面向高中和大学教学的RAG知识库系统
+-- ============================================================
+
+-- 启用必要扩展
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+CREATE EXTENSION IF NOT EXISTS "vector";
 
--- 存储聊天记录及历史会话
-CREATE TABLE public.messages (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    user_id UUID,
-    role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
-    content TEXT NOT NULL,
-    type TEXT DEFAULT 'text', -- 'text', 'file', 'plan'
-    file_info JSONB, -- 存储上传的文件信息如 name, size, type 等
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-);
+-- ============================================================
+-- 1. 用户表
+-- ============================================================
 
--- 存储生成的课件及教案设计
-CREATE TABLE public.coursewares (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    title TEXT NOT NULL,
-    slides JSONB NOT NULL, -- 存储课件的内容数组
-    lesson_plan JSONB, -- 存储教案结构
-    interaction JSONB, -- 存储设定的互动环节
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-);
-
--- 存储上传到知识库的教学材料信息
-CREATE TABLE public.knowledge_items (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    user_id UUID,
-    name TEXT NOT NULL,
-    type TEXT NOT NULL, -- 'pdf', 'docx'
-    size TEXT NOT NULL,
-    tags JSONB,
-    status TEXT DEFAULT 'completed', -- 'completed', 'syncing'
-    file_url TEXT, -- 如果存储在 Supabase Storage 中的引用
-    content TEXT, -- 存储提取出的文本内容用于 RAG
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-);
-
--- 开启 RLS 策略 (Row Level Security)。本应用为演示目的允许所有公开读写。
-ALTER TABLE public.messages ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Allow anonymous read all messages" ON public.messages FOR SELECT USING (true);
-CREATE POLICY "Allow anonymous insert messages" ON public.messages FOR INSERT WITH CHECK (true);
-CREATE POLICY "Allow anonymous delete messages" ON public.messages FOR DELETE USING (true);
-
-ALTER TABLE public.coursewares ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Allow anonymous read all coursewares" ON public.coursewares FOR SELECT USING (true);
-CREATE POLICY "Allow anonymous insert coursewares" ON public.coursewares FOR INSERT WITH CHECK (true);
-
-ALTER TABLE public.knowledge_items ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Allow anonymous read all knowledge" ON public.knowledge_items FOR SELECT USING (true);
-CREATE POLICY "Allow anonymous insert knowledge" ON public.knowledge_items FOR INSERT WITH CHECK (true);
-CREATE POLICY "Allow anonymous delete knowledge" ON public.knowledge_items FOR DELETE USING (true);
-CREATE POLICY "Allow anonymous update knowledge" ON public.knowledge_items FOR UPDATE USING (true);
-
--- 存储用户信息
-CREATE TABLE public.users (
+CREATE TABLE IF NOT EXISTS public.users (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     email TEXT UNIQUE NOT NULL,
     username TEXT NOT NULL,
     hashed_password TEXT NOT NULL,
-    role TEXT DEFAULT 'teacher', -- 'teacher', 'admin'
+    role TEXT DEFAULT 'teacher',
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
--- 开启 RLS 策略。允许所有公开读写以便开发环境下进行认证逻辑测试。
-ALTER TABLE public.users ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Allow anonymous read all users" ON public.users FOR SELECT USING (true);
-CREATE POLICY "Allow anonymous insert users" ON public.users FOR INSERT WITH CHECK (true);
-CREATE POLICY "Allow anonymous update users" ON public.users FOR UPDATE USING (true);
+-- ============================================================
+-- 2. 聊天记录表
+-- ============================================================
 
--- 存储教学模板
+CREATE TABLE IF NOT EXISTS public.messages (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID REFERENCES public.users(id) ON DELETE CASCADE,
+    role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+    content TEXT NOT NULL,
+    type TEXT DEFAULT 'text',
+    file_info JSONB,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_messages_user_id ON public.messages(user_id);
+
+-- ============================================================
+-- 3. 课件表
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS public.coursewares (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID REFERENCES public.users(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    slides JSONB NOT NULL,
+    lesson_plan JSONB,
+    interaction JSONB,
+    template_id UUID,
+    template_info JSONB,
+    file_url TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_coursewares_user_id ON public.coursewares(user_id);
+
+-- ============================================================
+-- 4. 系统模板表
+-- ============================================================
+
 CREATE TABLE IF NOT EXISTS public.templates (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     title TEXT NOT NULL,
@@ -80,103 +71,400 @@ CREATE TABLE IF NOT EXISTS public.templates (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
--- 存储导出记录
+-- ============================================================
+-- 5. 导出记录表
+-- ============================================================
+
 CREATE TABLE IF NOT EXISTS public.exports (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    user_id UUID REFERENCES public.users(id),
+    user_id UUID REFERENCES public.users(id) ON DELETE CASCADE,
     title TEXT NOT NULL,
-    format TEXT NOT NULL, -- 'PPTX', 'DOCX', 'PDF'
+    format TEXT NOT NULL,
     size TEXT,
+    file_url TEXT,
+    template_used UUID,
+    source_type TEXT,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
--- 为新表开启 RLS
-ALTER TABLE public.templates ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Allow public read templates" ON public.templates FOR SELECT USING (true);
+CREATE INDEX IF NOT EXISTS idx_exports_user_id ON public.exports(user_id);
 
-ALTER TABLE public.exports ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Allow anonymous read all exports" ON public.exports FOR SELECT USING (true);
-CREATE POLICY "Allow anonymous insert exports" ON public.exports FOR INSERT WITH CHECK (true);
+-- ============================================================
+-- 6. 用户自定义模板表
+-- ============================================================
 
--- 插入一些初始模板数据
-INSERT INTO public.templates (title, description, author, category, usage_count, image_url) VALUES
-('基础几何学互动讲义', '涵盖平面几何核心概念，包含交互式练习。', '李老师', '数学', 1200, 'https://picsum.photos/seed/math/400/300'),
-('植物的光合作用百科', '生动的生物学课件，包含动画演示。', '张老师', '生物', 856, 'https://picsum.photos/seed/bio/400/300'),
-('诗词赏析与创作练习', '优美的语文课件，激发学生创作灵感。', '陈老师', '语文', 2300, 'https://picsum.photos/seed/poem/400/300'),
-('未来信息技术发展史', '科技感十足的课件，探索IT前沿。', '王老师', '信息', 540, 'https://picsum.photos/seed/tech/400/300');
-
--- 用户自定义PPT模板库
 CREATE TABLE IF NOT EXISTS public.user_templates (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     user_id UUID NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
     title TEXT NOT NULL,
     description TEXT,
-    category TEXT,  -- 学术、趣味互动、简约白板、科学探究、艺术创作等
-    source_type TEXT NOT NULL,  -- 'upload' (上传PPT), 'saved_courseware' (课件保存)
-    visibility TEXT DEFAULT 'private',  -- 'private' (个人专用), 'public' (公共模板)
-    
-    -- 模板内容和样式
-    template_data JSONB NOT NULL,  -- 完整PPT结构和样式信息
-    slides_structure JSONB,  -- 幻灯片版式信息
-    theme_colors JSONB,  -- 配色方案
-    fonts JSONB,  -- 字体配置
-    placeholders JSONB,  -- 占位符定义
-    
-    -- 元数据
-    thumbnail_url TEXT,  -- 缩略图 URL
-    original_file_name TEXT,  -- 原始文件名
-    original_file_size TEXT,  -- 原始文件大小
-    usage_count INTEGER DEFAULT 0,  -- 使用次数
-    
+    category TEXT,
+    source_type TEXT NOT NULL,
+    visibility TEXT DEFAULT 'private' CHECK (visibility IN ('private', 'public')),
+    template_data JSONB NOT NULL,
+    slides_structure JSONB,
+    theme_colors JSONB,
+    fonts JSONB,
+    placeholders JSONB,
+    thumbnail_url TEXT,
+    original_file_name TEXT,
+    original_file_size TEXT,
+    usage_count INTEGER DEFAULT 0,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
+
+ALTER TABLE public.user_templates ADD COLUMN IF NOT EXISTS file_path TEXT;
+ALTER TABLE public.user_templates ADD COLUMN IF NOT EXISTS file_bucket TEXT;
+ALTER TABLE public.user_templates ADD COLUMN IF NOT EXISTS file_size_bytes BIGINT;
+ALTER TABLE public.user_templates ADD COLUMN IF NOT EXISTS thumbnail_path TEXT;
+ALTER TABLE public.user_templates ADD COLUMN IF NOT EXISTS has_original_file BOOLEAN DEFAULT FALSE;
+ALTER TABLE public.user_templates ADD COLUMN IF NOT EXISTS applicable_scenarios TEXT;
 
 CREATE INDEX IF NOT EXISTS idx_user_templates_user_id ON public.user_templates(user_id);
 CREATE INDEX IF NOT EXISTS idx_user_templates_visibility ON public.user_templates(visibility);
 CREATE INDEX IF NOT EXISTS idx_user_templates_category ON public.user_templates(category);
 
--- 模板收藏记录
+-- ============================================================
+-- 7. 模板收藏表
+-- ============================================================
+
 CREATE TABLE IF NOT EXISTS public.template_favorites (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     user_id UUID NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
     template_id UUID NOT NULL REFERENCES public.user_templates(id) ON DELETE CASCADE,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    
     UNIQUE(user_id, template_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_template_favorites_user_id ON public.template_favorites(user_id);
 
--- 为新表开启 RLS
--- 注意：由于本项目使用自定义JWT认证而非Supabase Auth，auth.uid()不可用
--- 因此这里采用允许所有操作的策略（开发环境）
+-- ============================================================
+-- 8. RAG知识库主表
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS public.knowledge_items (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID REFERENCES public.users(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    type TEXT NOT NULL DEFAULT 'txt',
+    size TEXT,
+    tags JSONB,
+    content TEXT,
+    status TEXT DEFAULT 'completed',
+    file_url TEXT,
+    file_original_name TEXT,
+    
+    visibility TEXT NOT NULL DEFAULT 'private' CHECK (visibility IN ('private', 'public')),
+    grade_level TEXT,
+    subject TEXT,
+    description TEXT,
+    
+    education_level TEXT CHECK (education_level IN ('senior_high', 'university', 'junior_high', 'primary', 'exam', 'vocational', 'general')),
+    semester TEXT,
+    chapter TEXT,
+    resource_type TEXT CHECK (resource_type IN ('textbook', 'curriculum', 'question_bank', 'notes', 'exam_paper', 'other')),
+    source TEXT,
+    knowledge_points JSONB,
+    difficulty TEXT CHECK (difficulty IN ('basic', 'intermediate', 'advanced', 'exam')),
+    
+    vector_status TEXT DEFAULT 'pending' CHECK (vector_status IN ('pending', 'processing', 'completed', 'failed')),
+    chunk_count INTEGER DEFAULT 0,
+    
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+ALTER TABLE public.knowledge_items ADD COLUMN IF NOT EXISTS visibility TEXT NOT NULL DEFAULT 'private';
+ALTER TABLE public.knowledge_items ADD COLUMN IF NOT EXISTS grade_level TEXT;
+ALTER TABLE public.knowledge_items ADD COLUMN IF NOT EXISTS subject TEXT;
+ALTER TABLE public.knowledge_items ADD COLUMN IF NOT EXISTS description TEXT;
+ALTER TABLE public.knowledge_items ADD COLUMN IF NOT EXISTS education_level TEXT;
+ALTER TABLE public.knowledge_items ADD COLUMN IF NOT EXISTS semester TEXT;
+ALTER TABLE public.knowledge_items ADD COLUMN IF NOT EXISTS chapter TEXT;
+ALTER TABLE public.knowledge_items ADD COLUMN IF NOT EXISTS resource_type TEXT;
+ALTER TABLE public.knowledge_items ADD COLUMN IF NOT EXISTS source TEXT;
+ALTER TABLE public.knowledge_items ADD COLUMN IF NOT EXISTS knowledge_points JSONB;
+ALTER TABLE public.knowledge_items ADD COLUMN IF NOT EXISTS difficulty TEXT;
+ALTER TABLE public.knowledge_items ADD COLUMN IF NOT EXISTS vector_status TEXT DEFAULT 'pending';
+ALTER TABLE public.knowledge_items ADD COLUMN IF NOT EXISTS chunk_count INTEGER DEFAULT 0;
+
+ALTER TABLE public.knowledge_items ADD COLUMN IF NOT EXISTS file_path TEXT;
+ALTER TABLE public.knowledge_items ADD COLUMN IF NOT EXISTS file_bucket TEXT;
+ALTER TABLE public.knowledge_items ADD COLUMN IF NOT EXISTS file_size_bytes BIGINT;
+ALTER TABLE public.knowledge_items ADD COLUMN IF NOT EXISTS file_mime_type TEXT;
+ALTER TABLE public.knowledge_items ADD COLUMN IF NOT EXISTS has_original_file BOOLEAN DEFAULT FALSE;
+
+CREATE INDEX IF NOT EXISTS idx_knowledge_items_user ON public.knowledge_items(user_id);
+CREATE INDEX IF NOT EXISTS idx_knowledge_items_visibility ON public.knowledge_items(visibility);
+CREATE INDEX IF NOT EXISTS idx_knowledge_items_vector_status ON public.knowledge_items(vector_status);
+CREATE INDEX IF NOT EXISTS idx_knowledge_items_grade_subject ON public.knowledge_items(grade_level, subject);
+CREATE INDEX IF NOT EXISTS idx_knowledge_items_education ON public.knowledge_items(education_level);
+CREATE INDEX IF NOT EXISTS idx_knowledge_items_resource_type ON public.knowledge_items(resource_type);
+CREATE INDEX IF NOT EXISTS idx_knowledge_items_full_classify ON public.knowledge_items(education_level, grade_level, subject);
+
+-- ============================================================
+-- 9. 知识向量表
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS public.knowledge_vectors (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    knowledge_item_id UUID REFERENCES public.knowledge_items(id) ON DELETE CASCADE,
+    chunk_index INTEGER NOT NULL,
+    chunk_text TEXT NOT NULL,
+    vector_embedding vector(384),
+    source_resource TEXT,
+    page_number INTEGER,
+    confidence_score FLOAT DEFAULT 1.0,
+    education_level TEXT,
+    subject TEXT,
+    grade_level TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+ALTER TABLE public.knowledge_vectors ADD COLUMN IF NOT EXISTS education_level TEXT;
+ALTER TABLE public.knowledge_vectors ADD COLUMN IF NOT EXISTS subject TEXT;
+ALTER TABLE public.knowledge_vectors ADD COLUMN IF NOT EXISTS grade_level TEXT;
+
+CREATE INDEX IF NOT EXISTS idx_knowledge_vectors_embedding 
+    ON public.knowledge_vectors USING ivfflat (vector_embedding vector_cosine_ops) WITH (lists = 100);
+CREATE INDEX IF NOT EXISTS idx_knowledge_vectors_item ON public.knowledge_vectors(knowledge_item_id);
+CREATE INDEX IF NOT EXISTS idx_knowledge_vectors_classify ON public.knowledge_vectors(education_level, subject, grade_level);
+
+-- ============================================================
+-- 10. 向量化日志表
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS public.vectorization_logs (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    knowledge_item_id UUID REFERENCES public.knowledge_items(id) ON DELETE CASCADE,
+    status TEXT NOT NULL CHECK (status IN ('success', 'failed')),
+    chunk_count INTEGER,
+    error_message TEXT,
+    processing_time_ms INTEGER,
+    processed_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_vectorization_logs_item ON public.vectorization_logs(knowledge_item_id);
+
+-- ============================================================
+-- 11. 搜索历史表
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS public.search_history (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID REFERENCES public.users(id) ON DELETE SET NULL,
+    query TEXT NOT NULL,
+    grade TEXT,
+    subject TEXT,
+    results_count INTEGER DEFAULT 0,
+    top_confidence_score FLOAT,
+    searched_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_search_history_user ON public.search_history(user_id);
+CREATE INDEX IF NOT EXISTS idx_search_history_time ON public.search_history(searched_at DESC);
+
+-- ============================================================
+-- 12. RAG对话表
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS public.rag_conversations (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID REFERENCES public.users(id) ON DELETE CASCADE,
+    title TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_rag_conversations_user ON public.rag_conversations(user_id);
+
+CREATE TABLE IF NOT EXISTS public.rag_messages (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    conversation_id UUID REFERENCES public.rag_conversations(id) ON DELETE CASCADE,
+    role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+    content TEXT NOT NULL,
+    sources JSONB,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_rag_messages_conversation ON public.rag_messages(conversation_id);
+
+-- ============================================================
+-- 13. 教学资源表
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS public.teaching_resources (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    resource_name TEXT NOT NULL,
+    grade_level TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    resource_type TEXT NOT NULL,
+    storage_path TEXT,
+    download_url TEXT,
+    is_public BOOLEAN DEFAULT true,
+    created_by UUID REFERENCES public.users(id) ON DELETE SET NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    preview_url TEXT,
+    description TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_teaching_resources_grade_subject ON public.teaching_resources(grade_level, subject);
+CREATE INDEX IF NOT EXISTS idx_teaching_resources_type ON public.teaching_resources(resource_type);
+
+-- ============================================================
+-- 14. 视图
+-- ============================================================
+
+CREATE OR REPLACE VIEW public.preset_knowledge_view AS
+SELECT 
+    id, name, education_level, grade_level, subject, semester, chapter,
+    resource_type, source, difficulty, tags, knowledge_points,
+    content, chunk_count, vector_status, created_at
+FROM public.knowledge_items
+WHERE visibility = 'public' AND user_id IS NULL;
+
+CREATE OR REPLACE VIEW public.knowledge_stats_view AS
+SELECT 
+    education_level, grade_level, subject, resource_type,
+    COUNT(*) as total_items,
+    SUM(chunk_count) as total_chunks,
+    COUNT(CASE WHEN vector_status = 'completed' THEN 1 END) as vectorized_items
+FROM public.knowledge_items
+WHERE visibility = 'public'
+GROUP BY education_level, grade_level, subject, resource_type
+ORDER BY education_level, grade_level, subject;
+
+-- ============================================================
+-- 15. 触发器：自动更新 updated_at
+-- ============================================================
+
+CREATE OR REPLACE FUNCTION public.update_updated_at_column()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = NOW();
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS update_user_templates_updated_at ON public.user_templates;
+CREATE TRIGGER update_user_templates_updated_at
+    BEFORE UPDATE ON public.user_templates
+    FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_knowledge_items_updated_at ON public.knowledge_items;
+CREATE TRIGGER update_knowledge_items_updated_at
+    BEFORE UPDATE ON public.knowledge_items
+    FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_rag_conversations_updated_at ON public.rag_conversations;
+CREATE TRIGGER update_rag_conversations_updated_at
+    BEFORE UPDATE ON public.rag_conversations
+    FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+
+-- ============================================================
+-- 16. RLS 行级安全策略
+-- ============================================================
+
+ALTER TABLE public.users ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.messages ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.coursewares ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.templates ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.exports ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.user_templates ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Allow anonymous read all user_templates" ON public.user_templates 
-    FOR SELECT USING (true);
-CREATE POLICY "Allow anonymous insert user_templates" ON public.user_templates 
-    FOR INSERT WITH CHECK (true);
-CREATE POLICY "Allow anonymous update user_templates" ON public.user_templates 
-    FOR UPDATE USING (true);
-CREATE POLICY "Allow anonymous delete user_templates" ON public.user_templates 
-    FOR DELETE USING (true);
-
 ALTER TABLE public.template_favorites ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Allow anonymous read all template_favorites" ON public.template_favorites 
-    FOR SELECT USING (true);
-CREATE POLICY "Allow anonymous insert template_favorites" ON public.template_favorites 
-    FOR INSERT WITH CHECK (true);
-CREATE POLICY "Allow anonymous delete template_favorites" ON public.template_favorites 
-    FOR DELETE USING (true);
+ALTER TABLE public.knowledge_items ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.knowledge_vectors ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.vectorization_logs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.search_history ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.rag_conversations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.rag_messages ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.teaching_resources ENABLE ROW LEVEL SECURITY;
 
--- 修改coursewares表，添加模板关联
-ALTER TABLE public.coursewares ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES public.users(id);
-ALTER TABLE public.coursewares ADD COLUMN IF NOT EXISTS template_id UUID REFERENCES public.user_templates(id);
-ALTER TABLE public.coursewares ADD COLUMN IF NOT EXISTS template_info JSONB;
+-- users
+DROP POLICY IF EXISTS "Allow all users" ON public.users;
+CREATE POLICY "Allow all users" ON public.users FOR ALL USING (true);
 
--- 修改exports表，添加模板信息
-ALTER TABLE public.exports ADD COLUMN IF NOT EXISTS template_used UUID REFERENCES public.user_templates(id);
-ALTER TABLE public.exports ADD COLUMN IF NOT EXISTS source_type TEXT;  -- 'template_applied', 'default', 'ai_generated'
+-- messages
+DROP POLICY IF EXISTS "Allow all messages" ON public.messages;
+CREATE POLICY "Allow all messages" ON public.messages FOR ALL USING (true);
 
-CREATE INDEX IF NOT EXISTS idx_coursewares_user_id ON public.coursewares(user_id);
-CREATE INDEX IF NOT EXISTS idx_coursewares_template_id ON public.coursewares(template_id);
+-- coursewares
+DROP POLICY IF EXISTS "Allow all coursewares" ON public.coursewares;
+CREATE POLICY "Allow all coursewares" ON public.coursewares FOR ALL USING (true);
+
+-- templates
+DROP POLICY IF EXISTS "Allow read templates" ON public.templates;
+CREATE POLICY "Allow read templates" ON public.templates FOR SELECT USING (true);
+
+-- exports
+DROP POLICY IF EXISTS "Allow all exports" ON public.exports;
+CREATE POLICY "Allow all exports" ON public.exports FOR ALL USING (true);
+
+-- user_templates
+DROP POLICY IF EXISTS "Allow all user_templates" ON public.user_templates;
+CREATE POLICY "Allow all user_templates" ON public.user_templates FOR ALL USING (true);
+
+-- template_favorites
+DROP POLICY IF EXISTS "Allow all template_favorites" ON public.template_favorites;
+CREATE POLICY "Allow all template_favorites" ON public.template_favorites FOR ALL USING (true);
+
+-- knowledge_items
+DROP POLICY IF EXISTS "Allow all knowledge" ON public.knowledge_items;
+CREATE POLICY "Allow all knowledge" ON public.knowledge_items FOR ALL USING (true);
+
+-- knowledge_vectors
+DROP POLICY IF EXISTS "Allow read vectors" ON public.knowledge_vectors;
+CREATE POLICY "Allow read vectors" ON public.knowledge_vectors FOR SELECT USING (true);
+
+-- vectorization_logs
+DROP POLICY IF EXISTS "Allow read logs" ON public.vectorization_logs;
+CREATE POLICY "Allow read logs" ON public.vectorization_logs FOR SELECT USING (true);
+
+-- search_history
+DROP POLICY IF EXISTS "Allow all search_history" ON public.search_history;
+CREATE POLICY "Allow all search_history" ON public.search_history FOR ALL USING (true);
+
+-- rag_conversations
+DROP POLICY IF EXISTS "Allow all rag_conversations" ON public.rag_conversations;
+CREATE POLICY "Allow all rag_conversations" ON public.rag_conversations FOR ALL USING (true);
+
+-- rag_messages
+DROP POLICY IF EXISTS "Allow all rag_messages" ON public.rag_messages;
+CREATE POLICY "Allow all rag_messages" ON public.rag_messages FOR ALL USING (true);
+
+-- teaching_resources
+DROP POLICY IF EXISTS "Allow public resources" ON public.teaching_resources;
+CREATE POLICY "Allow public resources" ON public.teaching_resources FOR SELECT USING (is_public = true);
+
+-- ============================================================
+-- 17. 系统用户（用于预设知识库）
+-- ============================================================
+
+INSERT INTO public.users (id, email, username, hashed_password, role)
+VALUES (
+    '00000000-0000-0000-0000-000000000001',
+    'system@preset-knowledge.local',
+    '系统预设知识库',
+    'system_preset_user',
+    'admin'
+) ON CONFLICT (id) DO NOTHING;
+
+-- ============================================================
+-- 完成
+-- ============================================================
+
+DO $$
+DECLARE
+    table_count INTEGER;
+BEGIN
+    SELECT COUNT(*) INTO table_count 
+    FROM information_schema.tables 
+    WHERE table_schema = 'public' AND table_type = 'BASE TABLE';
+    
+    RAISE NOTICE '========================================';
+    RAISE NOTICE '数据库初始化完成!';
+    RAISE NOTICE '表总数: %', table_count;
+    RAISE NOTICE '========================================';
+END $$;

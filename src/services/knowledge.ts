@@ -263,3 +263,80 @@ export async function getTeachingResources(
     throw error;
   }
 }
+
+/**
+ * 获取知识库文件的下载链接
+ * @param itemId 知识库条目ID
+ */
+export async function getKnowledgeDownloadUrl(itemId: string) {
+  try {
+    const response = await fetch(`${BASE_URL}/knowledge/${itemId}/download`, {
+      headers: getAuthHeaders()
+    });
+
+    if (!response.ok) {
+      throw new Error('获取下载链接失败');
+    }
+
+    return response.json();
+  } catch (error) {
+    console.error('获取下载链接失败:', error);
+    throw error;
+  }
+}
+
+/**
+ * 上传知识库文件 (使用 FormData，支持原始文件存储)
+ * @param file 文件对象
+ * @param metadata 元数据
+ */
+export async function uploadKnowledgeFileV2(
+  file: File,
+  metadata: {
+    name?: string;
+    visibility?: string;
+    grade_level?: string;
+    subject?: string;
+    description?: string;
+    education_level?: string;
+    resource_type?: string;
+    difficulty?: string;
+    semester?: string;
+    chapter?: string;
+    tags?: string;
+  }
+) {
+  try {
+    const formData = new FormData();
+    formData.append('file', file);
+    
+    if (metadata.name) formData.append('name', metadata.name);
+    if (metadata.visibility) formData.append('visibility', metadata.visibility);
+    if (metadata.grade_level) formData.append('grade_level', metadata.grade_level);
+    if (metadata.subject) formData.append('subject', metadata.subject);
+    if (metadata.description) formData.append('description', metadata.description);
+    if (metadata.education_level) formData.append('education_level', metadata.education_level);
+    if (metadata.resource_type) formData.append('resource_type', metadata.resource_type);
+    if (metadata.difficulty) formData.append('difficulty', metadata.difficulty);
+    if (metadata.semester) formData.append('semester', metadata.semester);
+    if (metadata.chapter) formData.append('chapter', metadata.chapter);
+    if (metadata.tags) formData.append('tags', metadata.tags);
+
+    const response = await fetch(`${BASE_URL}/knowledge/upload`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${getAuthToken()}`
+      },
+      body: formData
+    });
+
+    if (!response.ok) {
+      throw new Error('上传失败');
+    }
+
+    return response.json();
+  } catch (error) {
+    console.error('上传知识库失败:', error);
+    throw error;
+  }
+}

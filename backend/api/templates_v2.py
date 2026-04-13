@@ -225,6 +225,45 @@ async def get_template_detail(
         raise HTTPException(status_code=500, detail="获取模板失败")
 
 
+@router.get("/templates/{template_id}/download")
+async def download_template(
+    template_id: str,
+    user_id: str = Depends(get_current_user)
+):
+    """
+    获取模板文件的下载链接
+    
+    Parameters:
+    - template_id: 模板ID
+    
+    Returns:
+    - download_url: 下载链接
+    - file_name: 文件名
+    - expires_in: 链接有效期（私有模板）
+    """
+    try:
+        result = await TemplateService.get_template_download_url(
+            template_id=template_id,
+            user_id=user_id
+        )
+        
+        if not result:
+            raise HTTPException(status_code=404, detail="模板文件不存在或无权访问")
+        
+        return {
+            "success": True,
+            "download_url": result["download_url"],
+            "file_name": result["file_name"],
+            "expires_in": result.get("expires_in")
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取模板下载链接异常: {e}")
+        raise HTTPException(status_code=500, detail="获取下载链接失败")
+
+
 @router.post("/templates/{template_id}/copy")
 async def copy_template(
     template_id: str,

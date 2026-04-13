@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Bot, Mic, Paperclip, ArrowUp, X, Sparkles, Plus, FileText, RefreshCw } from 'lucide-react';
 import { cn } from '../../lib/utils';
@@ -45,9 +45,9 @@ export const DashboardView = ({
   const [isGenerating, setIsGenerating] = useState(false);
   const [attachedFile, setAttachedFile] = useState<any>(null);
   const [showConfirmBtnId, setShowConfirmBtnId] = useState<string | null>(null);
-  const [pendingTasks, setPendingTasks] = useState<any[] | null>(null); // 新增：待确认的任务列表
-  const [genTargetPrompt, setGenTargetPrompt] = useState<string>(''); // 记录当前生成的Prompt
-  const [isRecording, setIsRecording] = useState(false); // 新增：录音状态
+  const [pendingTasks, setPendingTasks] = useState<any[] | null>(null);
+  const [genTargetPrompt, setGenTargetPrompt] = useState<string>('');
+  const [isRecording, setIsRecording] = useState(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   
@@ -55,11 +55,13 @@ export const DashboardView = ({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const isStreamingRef = useRef(false);
   const lastScrollTimeRef = useRef(0);
+  const historyLoadedRef = useRef(false);
+  const welcomeShownRef = useRef(false);
+  const isRequestPendingRef = useRef(false);
 
   const scrollToBottom = (instant = false) => {
     if (scrollRef.current) {
       const { scrollHeight, clientHeight, scrollTop } = scrollRef.current;
-      // 只有当用户在底部附近（或强制 instant）时才自动滚动
       const isAtBottom = scrollHeight - scrollTop - clientHeight < 150;
       
       if (isAtBottom || instant) {
@@ -72,20 +74,20 @@ export const DashboardView = ({
   };
 
   useEffect(() => {
-    // 如果正在流式传输，则使用 instant 模式，避免 smooth 带来的抖动 (Jitter)
     scrollToBottom(isStreamingRef.current);
   }, [messages, isLoading, showConfirmBtnId]);
 
-  // 新增：初始化加载历史对话，增强工作台持久化体验
   useEffect(() => {
+    if (historyLoadedRef.current) return;
+    if (!currentUser?.id) return;
+    
     const loadHistory = async () => {
-      if (!currentUser?.id) return;
+      historyLoadedRef.current = true;
+      setIsLoading(true);
       
       try {
-        setIsLoading(true);
         const history = await getChatHistory(currentUser.id);
         if (history && history.length > 0) {
-          // 将数据库记录映射为前端 Message 类型
           const formattedMessages = history.map((m: any) => ({
             id: m.id.toString(),
             role: m.role,
@@ -102,26 +104,33 @@ export const DashboardView = ({
     };
     
     loadHistory();
-  }, [currentUser?.id, setMessages]);
+  }, [currentUser?.id]);
 
-  // 新增：当对话为空时，由智能体主动发起对话 (Proactive Greeting)
   useEffect(() => {
-    if (messages.length === 0 && !isLoading) {
+    if (welcomeShownRef.current) return;
+    if (messages.length === 0 && !isLoading && currentUser) {
+      welcomeShownRef.current = true;
+      
+      const knowledgeHint = knowledgeItems.length > 0 
+        ? `\n\n📚 **知识库已就绪**：已检测到 ${knowledgeItems.length} 份教学资料，我会自动从中检索相关内容来辅助回答。`
+        : '';
+      
       const welcomeMsg: Message = {
         id: 'welcome-msg',
         role: 'assistant',
-        content: `👋 您好${currentUser?.username ? '，' + currentUser.username : ''}！我是您的教学助手“豆沙包”。
+        content: `👋 您好${currentUser?.username ? '，' + currentUser.username : ''}！我是您的教学助手"豆沙包"。
 
 我可以帮您：
 - 🎨 **设计精美课件**（输入主题即可生成大纲与 PPT 内容）
 - 📝 **编写详细教案**（根据课程目标生成教学设计）
 - 💡 **策划课堂互动**（设计趣味导入、课堂习题）
+- 📚 **智能问答**（基于您的知识库进行精准回答）${knowledgeHint}
 
 您今天想准备什么课程？直接告诉我，或者试试下方的快捷功能。`
       };
       setMessages([welcomeMsg]);
     }
-  }, [messages.length, isLoading, currentUser]);
+  }, [messages.length, isLoading, currentUser, knowledgeItems.length]);
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -163,6 +172,8 @@ export const DashboardView = ({
 
   const handleSend = async () => {
     if (!input.trim() && !attachedFile) return;
+    if (isRequestPendingRef.current) return;
+    isRequestPendingRef.current = true;
 
     const userMsg: Message = {
       id: Date.now().toString(),
@@ -204,7 +215,6 @@ export const DashboardView = ({
         (token) => {
           fullResponse += token;
           const now = Date.now();
-          // 节流渲染：每 60ms 更新一次 UI，平衡流畅度与渲染开销
           if (now - lastUpdate > 60) {
             setMessages(prev =>
               prev.map(m => m.id === aiMsgId ? { ...m, content: fullResponse } : m)
@@ -215,7 +225,7 @@ export const DashboardView = ({
         () => {
           isStreamingRef.current = false;
           setIsLoading(false);
-          // 渲染最后剩余的部分
+          isRequestPendingRef.current = false;
           setMessages(prev =>
             prev.map(m => m.id === aiMsgId ? { ...m, content: fullResponse.replace('[READY_TO_GENERATE]', '').trim() } : m)
           );
@@ -227,6 +237,7 @@ export const DashboardView = ({
         (errorText) => {
           isStreamingRef.current = false;
           setIsLoading(false);
+          isRequestPendingRef.current = false;
           setMessages(prev =>
             prev.map(m => m.id === aiMsgId ? { ...m, content: `❌ **连接中断：** ${errorText}` } : m)
           );
@@ -236,16 +247,20 @@ export const DashboardView = ({
     } catch (error) {
       console.error('Chat Error:', error);
       setIsLoading(false);
+      isRequestPendingRef.current = false;
       setMessages(prev =>
         prev.map(m => m.id === aiMsgId ? { ...m, content: '抱歉，系统响应异常，请刷新重试。' } : m)
       );
     }
   };
 
-  /**
-   * 第一阶段：启动大纲拆解
-   */
   const startDecomposition = async (prompt: string) => {
+    if (isRequestPendingRef.current) {
+      console.log('[startDecomposition] 请求正在进行中，跳过');
+      return;
+    }
+    isRequestPendingRef.current = true;
+    
     setIsGenerating(true);
     setShowConfirmBtnId(null);
     setGenTargetPrompt(prompt);
@@ -254,16 +269,22 @@ export const DashboardView = ({
     setMessages(prev => [...prev, {
       id: genMsgId,
       role: 'assistant',
-      content: '🔍 **正在针对您的课题进行深度拆解并生成大纲...**'
+      content: '🔍 **正在针对您的课题进行深度拆解并生成大纲...**\n\n⏱️ 预计需要 10-30 秒，请耐心等待...'
     }]);
 
     try {
+      console.log('[startDecomposition] 开始调用 decomposeTopic API');
+      const startTime = Date.now();
+      
       const { tasks } = await decomposeTopic(
         prompt, 
         "通用", 
         "通用", 
         selectedTemplate?.id
       );
+      
+      const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+      console.log(`[startDecomposition] API 返回，耗时 ${elapsed}秒，任务数: ${tasks?.length || 0}`);
 
       if (!tasks || tasks.length === 0) {
         throw new Error('大纲生成异常，请重试。');
@@ -275,34 +296,47 @@ export const DashboardView = ({
       setMessages(prev => prev.map(m =>
         m.id === genMsgId ? { 
           ...m, 
-          content: `📝 **大纲已就绪，共 ${tasks.length} 章节：**\n\n${outlineMarkdown}\n\n确认大纲无误后，点击下方按钮开始为您精细化制作课件。` 
+          content: `📝 **大纲已就绪，共 ${tasks.length} 章节（耗时 ${elapsed}秒）：**\n\n${outlineMarkdown}\n\n✅ 确认大纲无误后，点击下方按钮开始为您精细化制作课件。` 
         } : m
       ));
       
       setShowConfirmBtnId(genMsgId);
     } catch (error: any) {
-      console.error('Decompose Error:', error);
+      console.error('[startDecomposition] 错误:', error);
+      const errorMsg = error.message?.includes('超时') 
+        ? `⚠️ **大纲生成超时。** ${error.message}\n\n💡 建议：请简化问题描述后重试，或刷新页面。`
+        : `⚠️ **大纲生成失败。** ${error.message}\n\n💡 建议：请检查网络连接后重试。`;
+      
       setMessages(prev => prev.map(m =>
-        m.id === genMsgId ? { ...m, content: `⚠️ **大纲生成失败。** ${error.message}` } : m
+        m.id === genMsgId ? { ...m, content: errorMsg } : m
       ));
     } finally {
       setIsGenerating(false);
+      isRequestPendingRef.current = false;
     }
   };
 
-  /**
-   * 第二阶段：启动详细内容生成
-   */
   const startContentGeneration = async () => {
-    if (!pendingTasks) return;
+    if (!pendingTasks) {
+      console.log('[startContentGeneration] 没有待处理的任务');
+      return;
+    }
+    if (isRequestPendingRef.current) {
+      console.log('[startContentGeneration] 请求正在进行中，跳过');
+      return;
+    }
+    isRequestPendingRef.current = true;
     
     setIsGenerating(true);
     const genMsgId = showConfirmBtnId!; 
     setShowConfirmBtnId(null);
+    
+    let successCount = 0;
+    let failCount = 0;
 
     try {
       setMessages(prev => prev.map(m =>
-        m.id === genMsgId ? { ...m, content: `✍️ **大纲已确认，开始逐页精雕细琢内容... (0/${pendingTasks.length})**` } : m
+        m.id === genMsgId ? { ...m, content: `✍️ **大纲已确认，开始逐页精雕细琢内容... (0/${pendingTasks.length})**\n\n⏱️ 每页约需 5-15 秒，整体预计 ${Math.ceil(pendingTasks.length * 10 / 60)} 分钟` } : m
       ));
 
       const slides: any[] = [];
@@ -311,20 +345,56 @@ export const DashboardView = ({
       for (let i = 0; i < pendingTasks.length; i++) {
         const task = pendingTasks[i];
         setMessages(prev => prev.map(m =>
-          m.id === genMsgId ? { ...m, content: `⚡ **正在处理第 ${i + 1}/${pendingTasks.length} 页：** ${task.topic}...` } : m
+          m.id === genMsgId ? { 
+            ...m, 
+            content: `⚡ **正在处理第 ${i + 1}/${pendingTasks.length} 页：** ${task.topic}...\n\n✅ 已完成: ${successCount} 页 | ❌ 失败: ${failCount} 页` 
+          } : m
         ));
 
-        const slideContent = await generateSlide(
-          task,
-          context,
-          currentUser?.id || 'default_user',
-          selectedTemplate?.id
-        );
-        slides.push({
-          ...slideContent,
-          page: task.page,
-          type: task.layout_suggestion || 'content'
-        });
+        try {
+          console.log(`[startContentGeneration] 开始生成第 ${i + 1} 页: ${task.topic}`);
+          const slideContent = await generateSlide(
+            task,
+            context,
+            currentUser?.id || 'default_user',
+            selectedTemplate?.id
+          );
+          
+          slides.push({
+            title: slideContent?.title || task.topic || `第${i + 1}页`,
+            content: slideContent?.content || [],
+            page_type: slideContent?.page_type || slideContent?.type || 'content',
+            type: slideContent?.type || task.layout_suggestion || 'content',
+            layout_suggestion: slideContent?.layout_suggestion || 'bullet_points',
+            variables: slideContent?.variables || {},
+            images: slideContent?.images || [],
+            tables: slideContent?.tables || [],
+            charts: slideContent?.charts || [],
+            page: task.page
+          });
+          successCount++;
+          console.log(`[startContentGeneration] 第 ${i + 1} 页生成成功`);
+        } catch (slideError: any) {
+          console.error(`[startContentGeneration] 第${i + 1}页生成失败:`, slideError);
+          failCount++;
+          slides.push({
+            title: task.topic || `第${i + 1}页`,
+            content: [task.description || '内容生成失败，请手动编辑'],
+            page_type: 'content',
+            type: 'content',
+            layout_suggestion: 'bullet_points',
+            variables: {},
+            images: [],
+            tables: [],
+            charts: [],
+            page: task.page,
+            error: slideError.message
+          });
+        }
+      }
+
+      if (slides.length === 0) {
+        throw new Error('所有幻灯片生成失败，请重试');
       }
 
       const finalResult = {
@@ -338,19 +408,29 @@ export const DashboardView = ({
       };
 
       onGenerated(finalResult);
+      
+      const statusMsg = failCount > 0 
+        ? `🎨 **课件制作完成！** 共 ${slides.length} 页（成功 ${successCount} 页，失败 ${failCount} 页）。\n\n⚠️ 部分页面生成失败，已使用占位内容，请在预览中检查。`
+        : `🎨 **整套课件制作完成！** 共 ${slides.length} 页，全部成功。点击顶部 **「预览」** 即可查看。`;
+      
       setMessages(prev => prev.map(m =>
-        m.id === genMsgId ? { ...m, content: '🎨 **整套课件制作完成！** 包含专业 PPT 内容、教案框架。点击顶部 **「预览」** 即可。' } : m
+        m.id === genMsgId ? { ...m, content: statusMsg } : m
       ));
       
       setPendingTasks(null); 
       setActiveTab('preview');
     } catch (error: any) {
-      console.error('Final Gen Error:', error);
+      console.error('[startContentGeneration] 最终错误:', error);
+      const errorMsg = error.message?.includes('超时')
+        ? `⚠️ **内容生成超时。** ${error.message}\n\n💡 建议：请尝试减少幻灯片数量或刷新页面重试。`
+        : `⚠️ **内容生成中断。** ${error.message}\n\n💡 建议：请检查网络连接后重试。`;
+      
       setMessages(prev => prev.map(m =>
-        m.id === genMsgId ? { ...m, content: `⚠️ **内容生成中断。** ${error.message}` } : m
+        m.id === genMsgId ? { ...m, content: errorMsg } : m
       ));
     } finally {
       setIsGenerating(false);
+      isRequestPendingRef.current = false;
     }
   };
 

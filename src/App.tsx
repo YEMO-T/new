@@ -28,7 +28,6 @@ import {
   Trash2,
   FolderInput,
   Shield,
-  Bot,
   Award,
   BookOpen,
   LogIn,
@@ -43,6 +42,11 @@ import { LoginView } from './components/auth/LoginView';
 import { OnboardingView } from './components/auth/OnboardingView';
 import { DashboardView } from './components/chat/DashboardView';
 import TemplateLibraryPage from './components/TemplateLibraryPage';
+import KnowledgeManagementView from './components/KnowledgeManagementView';
+import { MarkdownErrorBoundary } from './components/common/ErrorBoundary';
+import { safeMarkdownChildren, preprocessSlideContent } from './utils/textUtils';
+import { getErrorMessage, logError, ApiError } from './utils/errorUtils';
+import SafeMarkdown from './components/common/SafeMarkdown';
 
 // --- Components ---
 
@@ -215,7 +219,9 @@ import {
   deleteKnowledgeItem,
   updateKnowledgeItem,
   renderPptxFromServer,
-  renderDocxFromServer
+  renderDocxFromServer,
+  previewRenderedPptx,
+  PreviewSlide
 } from './services/api';
 import { exportToPPTX, exportToDOCX } from './services/export';
 
@@ -571,22 +577,71 @@ const OutlineView = ({ slides }: { slides: Slide[] }) => {
   );
 };
 
-const PreviewView = ({ slides, lessonPlan, interaction, onExport, currentUser }: { 
+const PreviewView = ({ slides, lessonPlan, interaction, onExport, currentUser, selectedTemplate }: { 
   slides: Slide[], 
   lessonPlan: LessonPlan | null, 
   interaction: Interaction | null,
   onExport?: (title: string, format: string) => void,
-  currentUser: UserInfo | null
+  currentUser: UserInfo | null,
+  selectedTemplate?: Template | null
 }) => {
   const [currentSlide, setCurrentSlide] = useState(0);
   const [mode, setMode] = useState<'ppt' | 'word' | 'interaction'>('ppt');
   const [isRendering, setIsRendering] = useState(true);
+  const [renderedSlides, setRenderedSlides] = useState<PreviewSlide[]>([]);
+  const [isPreviewLoading, setIsPreviewLoading] = useState(false);
+  const [previewMode, setPreviewMode] = useState<'outline' | 'rendered'>('outline');
 
   useEffect(() => {
     setIsRendering(true);
-    const timer = setTimeout(() => setIsRendering(false), 1000);
+    const timer = setTimeout(() => setIsRendering(false), 500);
     return () => clearTimeout(timer);
   }, [mode]);
+
+  const handlePreviewRendered = async () => {
+    if (slides.length === 0) {
+      console.warn('[handlePreviewRendered] 没有幻灯片可预览');
+      return;
+    }
+    
+    setIsPreviewLoading(true);
+    console.log('[handlePreviewRendered] 开始渲染预览, 幻灯片数:', slides.length);
+    
+    try {
+      const title = slides[0]?.title || '未命名课件';
+      console.log('[handlePreviewRendered] 请求参数:', {
+        slideCount: slides.length,
+        title,
+        templateId: selectedTemplate?.id
+      });
+      
+      const result = await previewRenderedPptx(slides, title, selectedTemplate?.id);
+      
+      console.log('[handlePreviewRendered] 渲染成功:', {
+        slideCount: result.slides.length,
+        renderTime: result.render_time
+      });
+      
+      setRenderedSlides(result.slides);
+      setPreviewMode('rendered');
+    } catch (error: any) {
+      logError('handlePreviewRendered', error);
+      
+      const errorMsg = getErrorMessage(error);
+      
+      if (error instanceof ApiError) {
+        console.error('[handlePreviewRendered] API错误详情:', {
+          status: error.status,
+          statusText: error.statusText,
+          detail: error.detail
+        });
+      }
+      
+      alert(`预览渲染失败: ${errorMsg}`);
+    } finally {
+      setIsPreviewLoading(false);
+    }
+  };
 
   if (slides.length === 0 && !lessonPlan) {
     return (
@@ -601,7 +656,7 @@ const PreviewView = ({ slides, lessonPlan, interaction, onExport, currentUser }:
 
   return (
     <div className="flex-1 p-11 h-full overflow-y-auto bg-[#f0f4f0]">
-      <div className="max-w-5xl mx-auto mb-8 flex gap-4">
+      <div className="max-w-5xl mx-auto mb-8 flex gap-4 flex-wrap">
         <button 
           onClick={() => setMode('ppt')}
           className={cn("px-6 py-2 rounded-full font-bold transition-all", mode === 'ppt' ? "bg-[#0d631b] text-white" : "bg-white text-[#161d19]/60")}
@@ -620,6 +675,43 @@ const PreviewView = ({ slides, lessonPlan, interaction, onExport, currentUser }:
         >
           互动环节
         </button>
+        {mode === 'ppt' && slides.length > 0 && (
+          <>
+            <div className="flex-1" />
+            <button 
+              onClick={() => setPreviewMode('outline')}
+              className={cn("px-4 py-2 rounded-full font-bold transition-all text-sm", previewMode === 'outline' ? "bg-[#0d631b]/20 text-[#0d631b]" : "bg-white text-[#161d19]/40")}
+            >
+              大纲预览
+            </button>
+            <button 
+              onClick={() => {
+                if (renderedSlides.length === 0) {
+                  handlePreviewRendered();
+                } else {
+                  setPreviewMode('rendered');
+                }
+              }}
+              disabled={isPreviewLoading}
+              className={cn("px-4 py-2 rounded-full font-bold transition-all text-sm flex items-center gap-2", 
+                previewMode === 'rendered' ? "bg-[#0d631b]/20 text-[#0d631b]" : "bg-white text-[#161d19]/40",
+                isPreviewLoading && "opacity-50 cursor-not-allowed"
+              )}
+            >
+              {isPreviewLoading ? (
+                <>
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                  渲染中...
+                </>
+              ) : (
+                <>
+                  <Eye className="w-4 h-4" />
+                  渲染预览
+                </>
+              )}
+            </button>
+          </>
+        )}
       </div>
 
       {isRendering ? (
@@ -634,138 +726,190 @@ const PreviewView = ({ slides, lessonPlan, interaction, onExport, currentUser }:
       ) : (
         <>
           {mode === 'ppt' && slides.length > 0 && (
-        <div className="max-w-5xl mx-auto aspect-video bg-white rounded-3xl shadow-2xl overflow-hidden relative flex flex-col border border-black/5">
-          <AnimatePresence mode="wait">
-            <motion.div 
-              key={currentSlide}
-              initial={{ opacity: 0, x: 20 }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: -20 }}
-              className="flex-1 flex flex-col items-center justify-center p-20 relative"
-            >
-              <div className="text-center max-w-3xl">
-                <h1 className={cn(
-                  "font-black text-[#0d631b] mb-6 tracking-tighter",
-                  slides[currentSlide].type === 'cover' ? "text-6xl" : "text-4xl"
-                )}>
-                  {slides[currentSlide].title}
-                </h1>
-                <div className="text-xl text-[#161d19]/80 font-medium leading-relaxed prose prose-green max-w-none">
-                  <ReactMarkdown>{slides[currentSlide].content}</ReactMarkdown>
-                </div>
-              </div>
-              {slides[currentSlide].imagePrompt && (
-                <div className="absolute bottom-6 right-6 opacity-20">
-                  <Sparkles className="w-8 h-8" />
-                </div>
-              )}
-            </motion.div>
-          </AnimatePresence>
-          <div className="h-20 px-10 bg-[#f4fbf4] border-t border-black/5 flex items-center justify-between">
-            <div className="flex items-center gap-6">
-              <button 
-                disabled={currentSlide === 0}
-                onClick={() => setCurrentSlide(prev => prev - 1)}
-                className="p-2 hover:bg-white rounded-full text-[#161d19]/40 transition-all disabled:opacity-20"
-              >
-                <ChevronLeft className="w-6 h-6" />
-              </button>
-              <span className="text-sm font-bold text-[#161d19]/60">{currentSlide + 1} / {slides.length}</span>
-              <button 
-                disabled={currentSlide === slides.length - 1}
-                onClick={() => setCurrentSlide(prev => prev + 1)}
-                className="p-2 hover:bg-white rounded-full text-[#161d19]/40 transition-all disabled:opacity-20"
-              >
-                <ChevronRight className="w-6 h-6" />
-              </button>
-            </div>
-            <div className="flex items-center gap-4">
-              <button className="p-2 hover:bg-white rounded-full text-[#161d19]/40 transition-all"><Maximize2 className="w-5 h-5" /></button>
-              <button className="p-2 hover:bg-white rounded-full text-[#161d19]/40 transition-all"><Copy className="w-5 h-5" /></button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {mode === 'word' && lessonPlan && (
-        <div className="max-w-4xl mx-auto bg-white rounded-3xl shadow-xl p-16 border border-black/5 min-h-[800px]">
-          <h1 className="text-4xl font-black text-[#161d19] mb-8 border-b-4 border-[#0d631b] pb-4">{lessonPlan.title}</h1>
-          <section className="mb-10">
-            <h2 className="text-xl font-bold text-[#0d631b] mb-4 flex items-center gap-2">
-              <CheckCircle2 className="w-5 h-5" /> 教学目标
-            </h2>
-            <ul className="list-disc list-inside space-y-2 text-[#161d19]/80">
-              {lessonPlan.objectives.map((obj, i) => <li key={i}>{obj}</li>)}
-            </ul>
-          </section>
-          <section className="mb-10">
-            <h2 className="text-xl font-bold text-[#0d631b] mb-4 flex items-center gap-2">
-              <Layers className="w-5 h-5" /> 教学过程
-            </h2>
-            <div className="space-y-6">
-              {lessonPlan.process.map((p, i) => (
-                <div key={i} className="flex gap-6">
-                  <div className="w-24 shrink-0 font-bold text-[#0d631b]">{p.duration}</div>
-                  <div className="flex-1">
-                    <h3 className="font-bold text-[#161d19] mb-1">{p.stage}</h3>
-                    <p className="text-[#161d19]/70 leading-relaxed">{p.content}</p>
+            previewMode === 'rendered' && renderedSlides.length > 0 ? (
+              <div className="max-w-5xl mx-auto aspect-video bg-white rounded-3xl shadow-2xl overflow-hidden relative flex flex-col border border-black/5">
+                <AnimatePresence mode="wait">
+                  <motion.div 
+                    key={currentSlide}
+                    initial={{ opacity: 0, x: 20 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    exit={{ opacity: 0, x: -20 }}
+                    className="flex-1 flex items-center justify-center p-4 relative bg-gray-100"
+                  >
+                    {renderedSlides[currentSlide]?.image ? (
+                      <img 
+                        src={renderedSlides[currentSlide].image!} 
+                        alt={renderedSlides[currentSlide].title}
+                        className="max-w-full max-h-full object-contain rounded-lg shadow-lg"
+                      />
+                    ) : (
+                      <div className="text-center p-8">
+                        <h2 className="text-2xl font-bold text-[#0d631b] mb-4">{renderedSlides[currentSlide]?.title}</h2>
+                        <p className="text-[#161d19]/60">{renderedSlides[currentSlide]?.content_preview || '暂无内容'}</p>
+                      </div>
+                    )}
+                  </motion.div>
+                </AnimatePresence>
+                <div className="h-20 px-10 bg-[#f4fbf4] border-t border-black/5 flex items-center justify-between">
+                  <div className="flex items-center gap-6">
+                    <button 
+                      disabled={currentSlide === 0}
+                      onClick={() => setCurrentSlide(prev => prev - 1)}
+                      className="p-2 hover:bg-white rounded-full text-[#161d19]/40 transition-all disabled:opacity-20"
+                    >
+                      <ChevronLeft className="w-6 h-6" />
+                    </button>
+                    <span className="text-sm font-bold text-[#161d19]/60">{currentSlide + 1} / {renderedSlides.length}</span>
+                    <button 
+                      disabled={currentSlide === renderedSlides.length - 1}
+                      onClick={() => setCurrentSlide(prev => prev + 1)}
+                      className="p-2 hover:bg-white rounded-full text-[#161d19]/40 transition-all disabled:opacity-20"
+                    >
+                      <ChevronRight className="w-6 h-6" />
+                    </button>
+                  </div>
+                  <div className="flex items-center gap-2 text-sm text-[#0d631b] font-medium">
+                    <Eye className="w-4 h-4" />
+                    渲染预览
                   </div>
                 </div>
-              ))}
+              </div>
+            ) : (
+              <div className="max-w-5xl mx-auto aspect-video bg-white rounded-3xl shadow-2xl overflow-hidden relative flex flex-col border border-black/5">
+                <AnimatePresence mode="wait">
+                  <motion.div 
+                    key={currentSlide}
+                    initial={{ opacity: 0, x: 20 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    exit={{ opacity: 0, x: -20 }}
+                    className="flex-1 flex flex-col items-center justify-center p-20 relative"
+                  >
+                    <div className="text-center max-w-3xl">
+                      <h1 className={cn(
+                        "font-black text-[#0d631b] mb-6 tracking-tighter",
+                        slides[currentSlide].type === 'cover' ? "text-6xl" : "text-4xl"
+                      )}>
+                        {slides[currentSlide].title}
+                      </h1>
+                      <div className="text-xl text-[#161d19]/80 font-medium leading-relaxed prose prose-green max-w-none">
+                        <SafeMarkdown>
+                          {slides[currentSlide].content}
+                        </SafeMarkdown>
+                      </div>
+                    </div>
+                    {slides[currentSlide].imagePrompt && (
+                      <div className="absolute bottom-6 right-6 opacity-20">
+                        <Sparkles className="w-8 h-8" />
+                      </div>
+                    )}
+                  </motion.div>
+                </AnimatePresence>
+                <div className="h-20 px-10 bg-[#f4fbf4] border-t border-black/5 flex items-center justify-between">
+                  <div className="flex items-center gap-6">
+                    <button 
+                      disabled={currentSlide === 0}
+                      onClick={() => setCurrentSlide(prev => prev - 1)}
+                      className="p-2 hover:bg-white rounded-full text-[#161d19]/40 transition-all disabled:opacity-20"
+                    >
+                      <ChevronLeft className="w-6 h-6" />
+                    </button>
+                    <span className="text-sm font-bold text-[#161d19]/60">{currentSlide + 1} / {slides.length}</span>
+                    <button 
+                      disabled={currentSlide === slides.length - 1}
+                      onClick={() => setCurrentSlide(prev => prev + 1)}
+                      className="p-2 hover:bg-white rounded-full text-[#161d19]/40 transition-all disabled:opacity-20"
+                    >
+                      <ChevronRight className="w-6 h-6" />
+                    </button>
+                  </div>
+                  <div className="flex items-center gap-4">
+                    <button className="p-2 hover:bg-white rounded-full text-[#161d19]/40 transition-all"><Maximize2 className="w-5 h-5" /></button>
+                    <button className="p-2 hover:bg-white rounded-full text-[#161d19]/40 transition-all"><Copy className="w-5 h-5" /></button>
+                  </div>
+                </div>
+              </div>
+            )
+          )}
+
+          {mode === 'word' && lessonPlan && (
+            <div className="max-w-4xl mx-auto bg-white rounded-3xl shadow-xl p-16 border border-black/5 min-h-[800px]">
+              <h1 className="text-4xl font-black text-[#161d19] mb-8 border-b-4 border-[#0d631b] pb-4">{lessonPlan.title}</h1>
+              <section className="mb-10">
+                <h2 className="text-xl font-bold text-[#0d631b] mb-4 flex items-center gap-2">
+                  <CheckCircle2 className="w-5 h-5" /> 教学目标
+                </h2>
+                <ul className="list-disc list-inside space-y-2 text-[#161d19]/80">
+                  {lessonPlan.objectives.map((obj, i) => <li key={i}>{obj}</li>)}
+                </ul>
+              </section>
+              <section className="mb-10">
+                <h2 className="text-xl font-bold text-[#0d631b] mb-4 flex items-center gap-2">
+                  <Layers className="w-5 h-5" /> 教学过程
+                </h2>
+                <div className="space-y-6">
+                  {lessonPlan.process.map((p, i) => (
+                    <div key={i} className="flex gap-6">
+                      <div className="w-24 shrink-0 font-bold text-[#0d631b]">{p.duration}</div>
+                      <div className="flex-1">
+                        <h3 className="font-bold text-[#161d19] mb-1">{p.stage}</h3>
+                        <p className="text-[#161d19]/70 leading-relaxed">{p.content}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </section>
+              <section>
+                <h2 className="text-xl font-bold text-[#0d631b] mb-4 flex items-center gap-2">
+                  <BookOpen className="w-5 h-5" /> 课后作业
+                </h2>
+                <p className="text-[#161d19]/80">{lessonPlan.homework}</p>
+              </section>
             </div>
-          </section>
-          <section>
-            <h2 className="text-xl font-bold text-[#0d631b] mb-4 flex items-center gap-2">
-              <BookOpen className="w-5 h-5" /> 课后作业
-            </h2>
-            <p className="text-[#161d19]/80">{lessonPlan.homework}</p>
-          </section>
-        </div>
-      )}
+          )}
 
-      {mode === 'interaction' && interaction && (
-        <div className="max-w-4xl mx-auto bg-white rounded-3xl shadow-xl p-16 border border-black/5 text-center">
-          <div className="w-20 h-20 bg-[#f4fbf4] rounded-2xl flex items-center justify-center text-[#0d631b] mx-auto mb-6">
-            {interaction.type === 'game' ? <PlayCircle className="w-10 h-10" /> : <Sparkles className="w-10 h-10" />}
-          </div>
-          <h2 className="text-3xl font-black text-[#161d19] mb-4">{interaction.title}</h2>
-          <div className="bg-[#f4fbf4] p-8 rounded-2xl text-left border border-[#0d631b]/10">
-            <p className="text-lg text-[#161d19]/80 leading-relaxed whitespace-pre-wrap">{interaction.description}</p>
-          </div>
-          <button className="mt-8 px-10 py-4 bg-[#0d631b] text-white rounded-full font-black shadow-lg hover:scale-105 transition-transform">
-            立即运行演示
-          </button>
-        </div>
-      )}
+          {mode === 'interaction' && interaction && (
+            <div className="max-w-4xl mx-auto bg-white rounded-3xl shadow-xl p-16 border border-black/5 text-center">
+              <div className="w-20 h-20 bg-[#f4fbf4] rounded-2xl flex items-center justify-center text-[#0d631b] mx-auto mb-6">
+                {interaction.type === 'game' ? <PlayCircle className="w-10 h-10" /> : <Sparkles className="w-10 h-10" />}
+              </div>
+              <h2 className="text-3xl font-black text-[#161d19] mb-4">{interaction.title}</h2>
+              <div className="bg-[#f4fbf4] p-8 rounded-2xl text-left border border-[#0d631b]/10">
+                <p className="text-lg text-[#161d19]/80 leading-relaxed whitespace-pre-wrap">{interaction.description}</p>
+              </div>
+              <button className="mt-8 px-10 py-4 bg-[#0d631b] text-white rounded-full font-black shadow-lg hover:scale-105 transition-transform">
+                立即运行演示
+              </button>
+            </div>
+          )}
 
-      <div className="max-w-5xl mx-auto mt-8 flex justify-center gap-4">
-        <button 
-          onClick={() => {
-            if (slides.length > 0) {
-              exportToPPTX(slides);
-              onExport?.(slides[0].title || '新建课件', 'PPTX');
-            }
-          }}
-          className="px-8 py-3 rounded-full bg-[#0d631b] text-white font-bold shadow-lg hover:opacity-90 transition-all flex items-center gap-2"
-        >
-          <Download className="w-5 h-5" /> 导出 PPT (.pptx)
-        </button>
-        <button 
-          onClick={() => {
-            if (lessonPlan) {
-              exportToDOCX(lessonPlan);
-              onExport?.(lessonPlan.title, 'DOCX');
-            }
-          }}
-          className="px-8 py-3 rounded-full bg-white text-[#161d19] font-bold border border-black/10 hover:bg-[#f4fbf4] transition-all flex items-center gap-2"
-        >
-          <FileText className="w-5 h-5" /> 导出教案 (.docx)
-        </button>
-      </div>
-    </>
-  )}
-</div>
-);
+          <div className="max-w-5xl mx-auto mt-8 flex justify-center gap-4">
+            <button 
+              onClick={() => {
+                if (slides.length > 0) {
+                  exportToPPTX(slides);
+                  onExport?.(slides[0].title || '新建课件', 'PPTX');
+                }
+              }}
+              className="px-8 py-3 rounded-full bg-[#0d631b] text-white font-bold shadow-lg hover:opacity-90 transition-all flex items-center gap-2"
+            >
+              <Download className="w-5 h-5" /> 导出 PPT (.pptx)
+            </button>
+            <button 
+              onClick={() => {
+                if (lessonPlan) {
+                  exportToDOCX(lessonPlan);
+                  onExport?.(lessonPlan.title, 'DOCX');
+                }
+              }}
+              className="px-8 py-3 rounded-full bg-white text-[#161d19] font-bold border border-black/10 hover:bg-[#f4fbf4] transition-all flex items-center gap-2"
+            >
+              <FileText className="w-5 h-5" /> 导出教案 (.docx)
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
 };
 
 const TemplateView = ({ setActiveTab, templates }: { setActiveTab: (tab: string) => void, templates: Template[] }) => {
@@ -1111,22 +1255,43 @@ export default function App() {
     setActiveTab('preview');
   };
 
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
+
   const handleExport = async (title: string, format: string) => {
+    if (exporting) return;
+    
+    setExporting(true);
+    setExportError(null);
+    
     try {
-      let fileUrl = '';
+      console.log('[handleExport] 开始导出:', { title, format, slideCount: slides.length });
+      
       if (format === 'PPTX') {
-        const res = await renderPptxFromServer(slides, title, selectedTemplate?.id);
-        fileUrl = res.file_url;
+        if (!slides || slides.length === 0) {
+          throw new Error('没有可导出的幻灯片内容，请先生成课件');
+        }
+        
+        const res = await renderPptxFromServer(slides, title, selectedTemplate?.id, lessonPlan, interaction);
+        
+        if (res.file_url) {
+          window.open(res.file_url, '_blank');
+        } else {
+          throw new Error('服务器未返回文件链接');
+        }
       } else {
-        if (!lessonPlan) throw new Error('教案内容缺失');
+        if (!lessonPlan) {
+          throw new Error('教案内容缺失，无法导出');
+        }
         const res = await renderDocxFromServer(title, lessonPlan);
-        fileUrl = res.file_url;
+        
+        if (res.file_url) {
+          window.open(res.file_url, '_blank');
+        } else {
+          throw new Error('服务器未返回文件链接');
+        }
       }
 
-      if (fileUrl) {
-        window.open(fileUrl, '_blank');
-      }
-      // 刷新列表
       const exports = await getExports();
       setExportRecords(exports.map((e: any) => ({
         id: e.id,
@@ -1136,8 +1301,16 @@ export default function App() {
         size: e.size,
         fileUrl: e.file_url
       })));
-    } catch (err) {
-      console.error('Failed to log export:', err);
+      
+      console.log('[handleExport] 导出成功');
+    } catch (err: any) {
+      logError('handleExport', err);
+      
+      const errorMsg = getErrorMessage(err);
+      setExportError(errorMsg);
+      alert(`导出失败: ${errorMsg}`);
+    } finally {
+      setExporting(false);
     }
   };
 
@@ -1170,15 +1343,8 @@ export default function App() {
         />
       );
       case 'outline': return <OutlineView slides={slides} />;
-      case 'preview': return <PreviewView slides={slides} lessonPlan={lessonPlan} interaction={interaction} onExport={handleExport} currentUser={currentUser} />;
-      case 'knowledge': return (
-        <KnowledgeBaseView
-          items={knowledgeItems}
-          onUpload={handleKnowledgeUpload}
-          onDeleteItem={handleKnowledgeDeleteItem}
-          onUpdateItem={handleKnowledgeUpdateItem}
-        />
-      );
+      case 'preview': return <PreviewView slides={slides} lessonPlan={lessonPlan} interaction={interaction} onExport={handleExport} currentUser={currentUser} selectedTemplate={selectedTemplate} />;
+      case 'knowledge': return <KnowledgeManagementView />;
       case 'templates': return <TemplateLibraryPage onSelectTemplate={(tpl: any) => {
         setSelectedTemplate(tpl);
         setActiveTab('dashboard');

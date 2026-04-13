@@ -1,6 +1,7 @@
 """
 PPT文件解析器 - 提取PPT结构、样式、占位符等信息
 支持 .pptx 格式（Microsoft Office Open XML）
+优化版本：减少数据量，避免超时
 """
 
 import io
@@ -21,7 +22,11 @@ logger = logging.getLogger(__name__)
 
 
 class PPTParser:
-    """PPT文件解析器 - 解析PPTX文件结构和样式信息"""
+    """PPT文件解析器 - 解析PPTX文件结构和样式信息（优化版）"""
+    
+    MAX_SLIDES_TO_PARSE = 10
+    MAX_SHAPES_PER_SLIDE = 20
+    MAX_TEXT_LENGTH = 100
     
     PLACEHOLDER_TYPES = {
         'title': 'Title',
@@ -36,18 +41,17 @@ class PPTParser:
     @staticmethod
     def parse_pptx(file_path: str) -> Dict[str, Any]:
         """
-        解析PPT文件并提取关键信息
+        解析PPT文件并提取关键信息（优化版）
         """
         try:
             prs = Presentation(file_path)
             
-            logger.info(f"开始解析PPT文件: {file_path}")
+            logger.info(f"开始解析PPT文件: {file_path}, 共 {len(prs.slides)} 页")
             
             slides_structure = PPTParser._extract_slides_structure(prs)
             theme_colors = PPTParser._extract_theme_colors(prs)
             fonts = PPTParser._extract_fonts(prs)
             placeholders = PPTParser._extract_placeholders(prs)
-            thumbnail = PPTParser._generate_thumbnail(prs)
             
             file_size = Path(file_path).stat().st_size if Path(file_path).exists() else 0
             
@@ -56,7 +60,7 @@ class PPTParser:
                 'theme_colors': theme_colors,
                 'fonts': fonts,
                 'placeholders': placeholders,
-                'thumbnail': thumbnail,
+                'thumbnail': '',
                 'page_count': len(prs.slides),
                 'file_size': file_size,
                 'slide_dimensions': {
@@ -65,7 +69,7 @@ class PPTParser:
                 },
             }
             
-            logger.info(f"[OK] PPT解析完成: {len(prs.slides)} 页，{theme_colors.get('primary', 'N/A')} 主色调")
+            logger.info(f"[OK] PPT解析完成: {len(prs.slides)} 页")
             return result
             
         except Exception as e:
@@ -74,10 +78,13 @@ class PPTParser:
     
     @staticmethod
     def _extract_slides_structure(prs: Presentation) -> List[Dict[str, Any]]:
-        """提取幻灯片版式信息"""
+        """提取幻灯片版式信息（优化版：限制数量，不存储图片数据）"""
         slides_info = []
         
         for idx, slide in enumerate(prs.slides):
+            if idx >= PPTParser.MAX_SLIDES_TO_PARSE:
+                break
+            
             slide_data = {
                 'index': idx,
                 'layout_name': slide.slide_layout.name,
@@ -94,15 +101,24 @@ class PPTParser:
             except Exception as e:
                 logger.debug(f"背景提取失败: {e}")
             
+            shape_count = 0
             for shape in slide.shapes:
+                if shape_count >= PPTParser.MAX_SHAPES_PER_SLIDE:
+                    break
+                
                 shape_info = {
                     'shape_type': str(shape.shape_type),
                     'name': shape.name,
-                    'left': float(shape.left) if hasattr(shape, 'left') else None,
-                    'top': float(shape.top) if hasattr(shape, 'top') else None,
-                    'width': float(shape.width) if hasattr(shape, 'width') else None,
-                    'height': float(shape.height) if hasattr(shape, 'height') else None,
                 }
+                
+                if hasattr(shape, 'left') and shape.left:
+                    shape_info['left'] = float(shape.left)
+                if hasattr(shape, 'top') and shape.top:
+                    shape_info['top'] = float(shape.top)
+                if hasattr(shape, 'width') and shape.width:
+                    shape_info['width'] = float(shape.width)
+                if hasattr(shape, 'height') and shape.height:
+                    shape_info['height'] = float(shape.height)
                 
                 if hasattr(shape, 'fill') and shape.fill.type:
                     try:
@@ -110,24 +126,20 @@ class PPTParser:
                     except:
                         pass
 
-                if hasattr(shape, 'text'):
-                    shape_info['text'] = shape.text[:200]
+                if hasattr(shape, 'text') and shape.text:
+                    shape_info['text'] = shape.text[:PPTParser.MAX_TEXT_LENGTH]
                     shape_info['text_length'] = len(shape.text)
                 
                 if shape.shape_type == MSO_SHAPE_TYPE.PICTURE:
-                    try:
-                        image = shape.image
-                        image_bytes = image.blob
-                        base64_img = base64.b64encode(image_bytes).decode('utf-8')
-                        shape_info['image_data'] = f"data:{image.ext};base64,{base64_img}"
-                    except Exception as e:
-                        logger.debug(f"图片提取失败: {e}")
-
+                    shape_info['has_image'] = True
+                
                 if hasattr(shape, 'text_frame'):
                     shape_info['text_format'] = PPTParser._extract_text_format(shape.text_frame)
                 
-                slide_data['shapes'].append(shape_info)
+                slides_info.append(shape_info)
+                shape_count += 1
             
+            slide_data['shapes'] = slides_info[-shape_count:] if shape_count > 0 else []
             slides_info.append(slide_data)
         
         logger.info(f"[OK] 提取 {len(slides_info)} 个幻灯片结构")
@@ -135,7 +147,7 @@ class PPTParser:
     
     @staticmethod
     def _extract_theme_colors(prs: Presentation) -> Dict[str, str]:
-        """提取PPT主题色"""
+        """提取PPT主题色（优化版：只检查前3页）"""
         colors = {
             'primary': '#000000',
             'secondary': '#FFFFFF',
@@ -146,7 +158,8 @@ class PPTParser:
         
         try:
             for i, slide in enumerate(prs.slides):
-                if i >= 5: break
+                if i >= 3:
+                    break
                 for shape in slide.shapes:
                     try:
                         if hasattr(shape, 'fill') and shape.fill.type:
@@ -176,7 +189,7 @@ class PPTParser:
     
     @staticmethod
     def _extract_fonts(prs: Presentation) -> Dict[str, Any]:
-        """提取字体信息"""
+        """提取字体信息（优化版：只检查前5页）"""
         fonts_found = {
             'titles': set(),
             'body': set(),
@@ -185,7 +198,8 @@ class PPTParser:
         
         try:
             for i, slide in enumerate(prs.slides):
-                if i >= 10: break
+                if i >= 5:
+                    break
                 for shape in slide.shapes:
                     try:
                         if hasattr(shape, 'text_frame'):
@@ -214,7 +228,7 @@ class PPTParser:
     
     @staticmethod
     def _extract_placeholders(prs: Presentation) -> Dict[str, Any]:
-        """提取占位符定义"""
+        """提取占位符定义（优化版：只检查前3页）"""
         placeholders_found = {
             'title': False,
             'content': False,
@@ -225,7 +239,8 @@ class PPTParser:
         
         try:
             for i, slide in enumerate(prs.slides):
-                if i >= 5: break
+                if i >= 3:
+                    break
                 for shape in slide.shapes:
                     try:
                         if shape.is_placeholder:
@@ -241,7 +256,7 @@ class PPTParser:
                         
                         if hasattr(shape, 'text') and shape.text and len(shape.text) > 3:
                             example_content = placeholders_found.get('example_content', [])
-                            if isinstance(example_content, list):
+                            if isinstance(example_content, list) and len(example_content) < 3:
                                 example_content.append({
                                     'type': shape.name,
                                     'text': shape.text[:50],
@@ -251,9 +266,6 @@ class PPTParser:
                         pass
         except Exception as e:
             logger.warning(f"占位符提取失败: {e}")
-        
-        example_content = placeholders_found.get('example_content', [])
-        placeholders_found['example_content'] = example_content[:3] if example_content else []
         
         logger.info(f"[OK] 提取占位符: 标题={placeholders_found['title']}, "
                    f"内容={placeholders_found['content']}")
@@ -322,33 +334,6 @@ class PPTParser:
         return None
     
     @staticmethod
-    def _generate_thumbnail(prs: Presentation, max_size: Tuple[int, int] = (300, 225)) -> str:
-        """
-        生成PPT缩略图（第一页）
-        返回Base64编码的PNG图像
-        """
-        try:
-            if not prs.slides:
-                logger.warning("PPT无幻灯片，无法生成缩略图")
-                return ""
-            
-            slide = prs.slides[0]
-            
-            img = Image.new('RGB', max_size, color='white')
-            
-            buffer = io.BytesIO()
-            img.save(buffer, format='PNG')
-            buffer.seek(0)
-            base64_str = base64.b64encode(buffer.getvalue()).decode('utf-8')
-            
-            logger.info(f"[OK] 生成缩略图: {len(base64_str)} 字节")
-            return f"data:image/png;base64,{base64_str}"
-            
-        except Exception as e:
-            logger.warning(f"缩略图生成失败: {e}")
-            return ""
-    
-    @staticmethod
     def validate_pptx_file(file_path: str) -> Tuple[bool, str]:
         """
         验证PPT文件有效性
@@ -376,7 +361,7 @@ class PPTParser:
 
 def extract_template_from_pptx(file_path: str) -> Dict[str, Any]:
     """
-    从PPT文件提取模板信息
+    从PPT文件提取模板信息（优化版）
     """
     is_valid, message = PPTParser.validate_pptx_file(file_path)
     if not is_valid:

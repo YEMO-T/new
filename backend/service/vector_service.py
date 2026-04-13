@@ -11,15 +11,33 @@ from repository.supabase_client import get_supabase_client
 logger = logging.getLogger(__name__)
 
 _embedding_model = None
+_model_loaded = False
+
+def preload_embedding_model():
+    """预加载向量模型（应用启动时调用）"""
+    global _embedding_model, _model_loaded
+    if not _model_loaded:
+        try:
+            logger.info("[PRELOAD] 开始预加载向量模型 all-MiniLM-L6-v2...")
+            _embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+            _model_loaded = True
+            logger.info("[PRELOAD] ✅ 向量模型预加载完成")
+        except Exception as e:
+            logger.error(f"[PRELOAD] ❌ 向量模型预加载失败: {e}")
 
 def get_embedding_model():
     """获取或初始化向量模型（单例模式）"""
-    global _embedding_model
+    global _embedding_model, _model_loaded
     if _embedding_model is None:
         logger.info("[INFO] 正在加载向量模型 all-MiniLM-L6-v2...")
         _embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+        _model_loaded = True
         logger.info("[OK] 向量模型加载完成")
     return _embedding_model
+
+def is_model_ready():
+    """检查模型是否已加载"""
+    return _model_loaded and _embedding_model is not None
 
 
 def chunk_text(text: str, chunk_size: int = 512, overlap: int = 100) -> List[str]:
@@ -296,25 +314,104 @@ async def search_rag(
         return []
 
 
-def _cosine_similarity(vec1: List[float], vec2: List[float]) -> float:
+def _parse_vector(vec) -> Optional[List[float]]:
+    """
+    健壮的向量解析函数
+    支持多种格式：
+    - List[float]: 直接返回
+    - "0.1,0.2,0.3": 逗号分隔字符串
+    - "0.1 0.2 0.3": 空格分隔字符串
+    - "[0.1, 0.2, 0.3]": 带方括号的字符串
+    - numpy数组: 转换为列表
+    """
+    if vec is None:
+        return None
+    
+    if isinstance(vec, (list, tuple)):
+        try:
+            return [float(x) if x is not None else 0.0 for x in vec]
+        except (ValueError, TypeError):
+            return None
+    
+    if hasattr(vec, 'tolist'):
+        try:
+            return vec.tolist()
+        except Exception:
+            pass
+    
+    if not isinstance(vec, str):
+        return None
+    
+    vec_str = vec.strip()
+    if not vec_str:
+        return None
+    
+    vec_str = vec_str.strip('[]').strip('()').strip('"').strip("'")
+    vec_str = vec_str.replace('\n', ' ').replace('\t', ' ')
+    
+    separators = [',', ' ', ';', '|']
+    parts = None
+    
+    for sep in separators:
+        if sep in vec_str:
+            parts = [p.strip() for p in vec_str.split(sep) if p.strip()]
+            break
+    
+    if parts is None:
+        parts = [vec_str] if vec_str else []
+    
+    result = []
+    for part in parts:
+        try:
+            cleaned = part.strip().replace('"', '').replace("'", '')
+            if cleaned:
+                result.append(float(cleaned))
+        except (ValueError, TypeError):
+            continue
+    
+    return result if result else None
+
+
+def _cosine_similarity(vec1: List[float], vec2) -> float:
     """
     计算两个向量的余弦相似度
+    支持多种向量格式输入
     """
     try:
         import numpy as np
         
-        vec1 = np.array(vec1)
-        vec2 = np.array(vec2)
+        parsed_vec1 = _parse_vector(vec1)
+        parsed_vec2 = _parse_vector(vec2)
         
-        dot_product = np.dot(vec1, vec2)
-        norm1 = np.linalg.norm(vec1)
-        norm2 = np.linalg.norm(vec2)
+        if parsed_vec1 is None or parsed_vec2 is None:
+            logger.error(f"[ERR] 向量解析失败: vec1={type(vec1)}, vec2={type(vec2)}")
+            return 0.0
+        
+        if len(parsed_vec1) == 0 or len(parsed_vec2) == 0:
+            logger.error("[ERR] 向量为空")
+            return 0.0
+        
+        arr1 = np.array(parsed_vec1, dtype=np.float64)
+        arr2 = np.array(parsed_vec2, dtype=np.float64)
+        
+        if arr1.shape != arr2.shape:
+            min_len = min(len(arr1), len(arr2))
+            if min_len == 0:
+                return 0.0
+            arr1 = arr1[:min_len]
+            arr2 = arr2[:min_len]
+            logger.debug(f"[DEBUG] 向量维度对齐: {min_len}")
+        
+        norm1 = np.linalg.norm(arr1)
+        norm2 = np.linalg.norm(arr2)
         
         if norm1 == 0 or norm2 == 0:
             return 0.0
         
+        dot_product = np.dot(arr1, arr2)
         similarity = dot_product / (norm1 * norm2)
-        return (similarity + 1) / 2
+        
+        return float((similarity + 1) / 2)
         
     except Exception as e:
         logger.error(f"[ERR] 相似度计算异常: {e}")
