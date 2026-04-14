@@ -48,8 +48,15 @@ export const DashboardView = ({
   const [pendingTasks, setPendingTasks] = useState<any[] | null>(null);
   const [genTargetPrompt, setGenTargetPrompt] = useState<string>('');
   const [isRecording, setIsRecording] = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
+  const [recordingSeconds, setRecordingSeconds] = useState(0);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
+  const streamRef = useRef<MediaStream | null>(null);
+  const recordingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const autoStopTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
+  const isMountedRef = useRef(true);
   
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -105,6 +112,174 @@ export const DashboardView = ({
     
     loadHistory();
   }, [currentUser?.id]);
+
+  const MAX_RECORDING_SECONDS = 60;
+
+  const cleanupStream = useCallback(() => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current = null;
+    }
+  }, []);
+
+  const forceCleanup = useCallback(() => {
+    if (autoStopTimeoutRef.current) {
+      clearTimeout(autoStopTimeoutRef.current);
+      autoStopTimeoutRef.current = null;
+    }
+    if (recordingTimerRef.current) {
+      clearInterval(recordingTimerRef.current);
+      recordingTimerRef.current = null;
+    }
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      try { mediaRecorderRef.current.stop(); } catch { /* ignore */ }
+    }
+    cleanupStream();
+  }, [cleanupStream]);
+
+  const stopRecording = useCallback(() => {
+    if (autoStopTimeoutRef.current) {
+      clearTimeout(autoStopTimeoutRef.current);
+      autoStopTimeoutRef.current = null;
+    }
+    if (!mediaRecorderRef.current || mediaRecorderRef.current.state === 'inactive') return;
+    
+    try {
+      mediaRecorderRef.current.stop();
+    } catch (e) {
+      console.warn('MediaRecorder stop error:', e);
+    }
+    
+    if (recordingTimerRef.current) {
+      clearInterval(recordingTimerRef.current);
+      recordingTimerRef.current = null;
+    }
+    setRecordingSeconds(0);
+    setIsRecording(false);
+  }, []);
+
+  const startRecording = useCallback(async () => {
+    if (isRecording || isTranscribing) return;
+    
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        }
+      });
+      
+      streamRef.current = stream;
+      
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+        ? 'audio/webm;codecs=opus'
+        : MediaRecorder.isTypeSupported('audio/webm')
+          ? 'audio/webm'
+          : '';
+      
+      const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : {});
+      mediaRecorderRef.current = recorder;
+      audioChunksRef.current = [];
+      
+      recorder.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) {
+          audioChunksRef.current.push(e.data);
+        }
+      };
+      
+      recorder.onstop = async () => {
+        if (!isMountedRef.current) return;
+
+        if (audioChunksRef.current.length === 0) {
+          cleanupStream();
+          if (isMountedRef.current) setIsTranscribing(false);
+          return;
+        }
+        
+        const blobMimeType = recorder.mimeType || 'audio/webm';
+        const audioBlob = new Blob(audioChunksRef.current, { type: blobMimeType });
+        const ext = blobMimeType.includes('webm') ? 'webm' : blobMimeType.includes('mp4') ? 'm4a' : 'wav';
+        
+        cleanupStream();
+        
+        if (audioBlob.size < 1024) {
+          if (isMountedRef.current) setIsTranscribing(false);
+          return;
+        }
+        
+        if (isMountedRef.current) setIsTranscribing(true);
+        
+        const abortCtrl = new AbortController();
+        abortControllerRef.current = abortCtrl;
+        
+        try {
+          const formData = new FormData();
+          formData.append('file', audioBlob, `voice.${ext}`);
+          
+          const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
+          const response = await fetch(`${apiBase}/api/voice/transcribe`, {
+            method: 'POST',
+            body: formData,
+            signal: abortCtrl.signal
+          });
+          
+          if (!isMountedRef.current) return;
+          
+          const data = await response.json();
+          
+          if (response.ok && data.text && isMountedRef.current) {
+            setInput(data.text || '');
+          } else if (!response.ok) {
+            console.warn('语音转写返回:', data.detail || data.message || JSON.stringify(data));
+          }
+        } catch (err) {
+          if ((err as Error).name !== 'AbortError') {
+            console.error('语音转写请求失败:', err);
+          }
+        } finally {
+          abortControllerRef.current = null;
+          if (isMountedRef.current) setIsTranscribing(false);
+        }
+      };
+      
+      recorder.start(200);
+      setIsRecording(true);
+      setRecordingSeconds(0);
+      
+      recordingTimerRef.current = setInterval(() => {
+        setRecordingSeconds(prev => {
+          const next = prev + 1;
+          if (next >= MAX_RECORDING_SECONDS) {
+            autoStopTimeoutRef.current = setTimeout(() => stopRecording(), 0);
+            return next;
+          }
+          return next;
+        });
+      }, 1000);
+      
+    } catch (err) {
+      console.error('无法访问麦克风:', err);
+      const msg = err instanceof DOMException
+        ? (err.name === 'NotAllowedError' ? '麦克风权限被拒绝，请在浏览器设置中允许访问麦克风' :
+           err.name === 'NotFoundError' ? '未检测到麦克风设备，请确认已连接麦克风' :
+           '无法访问麦克风，请检查权限设置')
+        : '录音初始化失败，请重试';
+      alert(msg);
+    }
+  }, [isRecording, isTranscribing, stopRecording, cleanupStream]);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+      forceCleanup();
+    };
+  }, [forceCleanup]);
 
   useEffect(() => {
     if (welcomeShownRef.current) return;
@@ -572,61 +747,37 @@ export const DashboardView = ({
 
           <div className="relative group p-2 bg-white border-2 border-[#0d631b] rounded-[32px] shadow-[0_20px_50px_-12px_rgba(13,99,27,0.15)] focus-within:shadow-[0_20px_50px_-12px_rgba(13,99,27,0.25)] transition-all">
             <div className="flex items-center gap-1 ml-2">
-              <button 
-                onMouseDown={async () => {
-                  try {
-                    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                    const recorder = new MediaRecorder(stream);
-                    mediaRecorderRef.current = recorder;
-                    audioChunksRef.current = [];
-                    
-                    recorder.ondataavailable = (e) => {
-                      if (e.data.size > 0) audioChunksRef.current.push(e.data);
-                    };
-                    
-                    recorder.onstop = async () => {
-                      const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
-                      const formData = new FormData();
-                      formData.append('file', audioBlob, 'voice.webm');
-                      
-                      try {
-                        setIsLoading(true);
-                        const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000'}/api/voice/transcribe`, {
-                          method: 'POST',
-                          body: formData
-                        });
-                        const data = await response.json();
-                        if (data.text) {
-                          setInput(data.text);
-                        }
-                      } catch (err) {
-                        console.error('语音转写识别失败:', err);
-                      } finally {
-                        setIsLoading(false);
-                      }
-                      // 停止流
-                      stream.getTracks().forEach(track => track.stop());
-                    };
-                    
-                    recorder.start();
-                    setIsRecording(true);
-                  } catch (err) {
-                    alert('无法访问麦克风，请检查权限设置');
-                  }
-                }}
-                onMouseUp={() => {
-                  if (mediaRecorderRef.current && isRecording) {
-                    mediaRecorderRef.current.stop();
-                    setIsRecording(false);
-                  }
-                }}
-                className={cn(
-                  "w-11 h-11 rounded-full flex items-center justify-center transition-all",
-                  isRecording ? "bg-red-500 text-white animate-pulse" : "text-[#0d631b] hover:bg-[#f4fbf4]"
-                )}
-              >
-                <Mic className="w-5 h-5" />
-              </button>
+              {isRecording ? (
+                <button
+                  onClick={stopRecording}
+                  className="w-11 h-11 rounded-full flex items-center justify-center bg-red-500 text-white animate-pulse transition-all relative"
+                  title="点击停止录音"
+                >
+                  <Mic className="w-5 h-5" />
+                  <span className="absolute -top-6 left-1/2 -translate-x-1/2 bg-red-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-full whitespace-nowrap">
+                    {recordingSeconds}s / {MAX_RECORDING_SECONDS}s
+                  </span>
+                </button>
+              ) : isTranscribing ? (
+                <button
+                  disabled
+                  className="w-11 h-11 rounded-full flex items-center justify-center bg-blue-100 text-blue-600 transition-all"
+                  title="正在转写中..."
+                >
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                </button>
+              ) : (
+                <button
+                  onClick={startRecording}
+                  className={cn(
+                    "w-11 h-11 rounded-full flex items-center justify-center transition-all",
+                    "text-[#0d631b] hover:bg-[#f4fbf4]"
+                  )}
+                  title="按住或点击开始录音"
+                >
+                  <Mic className="w-5 h-5" />
+                </button>
+              )}
               <button 
                 onClick={() => fileInputRef.current?.click()}
                 className={cn(

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { saveAs } from 'file-saver';
 import './PPTSlidePreview.css';
 
 const BASE_URL = process.env.REACT_APP_API_BASE_URL || 'http://localhost:8000/api';
@@ -159,9 +160,19 @@ export const PPTSlidePreview: React.FC<PPTSlidePreviewProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [handleKeyDown]);
 
-  const handleDownload = () => {
+  const handleDownload = async () => {
     const url = `${BASE_URL}/ppt-templates/${templateId}/download?token=${encodeURIComponent(token)}`;
-    window.open(url, '_blank');
+    try {
+      const response = await fetch(url);
+      if (response.ok) {
+        const blob = await response.blob();
+        saveAs(blob, `模板_${templateId}.pptx`);
+      } else {
+        window.open(url, '_blank');
+      }
+    } catch {
+      window.open(url, '_blank');
+    }
   };
 
   const renderStructureSlide = (slideData: StructureSlide, themeColors?: Record<string, string>, fonts?: Record<string, any>) => {

@@ -62,10 +62,10 @@ def ensure_bucket_exists(bucket_name: str) -> bool:
     """
     try:
         supabase = get_supabase_client()
-        
+
         buckets = supabase.storage.list_buckets()
-        bucket_names = [b.get('name') for b in buckets]
-        
+        bucket_names = [b.name for b in buckets]  # ✅ 修复：使用 .name 属性
+
         if bucket_name in bucket_names:
             logger.info(f"[Storage] Bucket '{bucket_name}' 已存在")
             return True
@@ -92,7 +92,7 @@ def get_available_buckets() -> List[str]:
     try:
         supabase = get_supabase_client()
         buckets = supabase.storage.list_buckets()
-        return [b.get('name') for b in buckets]
+        return [b.name for b in buckets]  # ✅ 修复：使用 .name 属性
     except Exception as e:
         logger.error(f"[Storage] 获取 Bucket 列表失败: {e}")
         return []
@@ -216,6 +216,31 @@ def upload_template_file(
         
     except Exception as e:
         logger.error(f"[ERR] 模板文件上传失败: {e}")
+        return None
+
+
+
+def download_template_file(bucket_name: str, file_path: str) -> Optional[bytes]:
+    """
+    从 Storage 下载模板文件
+    
+    Args:
+        bucket_name: 存储桶名称
+        file_path: 文件在存储中的路径
+    
+    Returns:
+        文件二进制数据，失败返回 None
+    """
+    try:
+        supabase = get_supabase_client()
+        
+        file_data = supabase.storage.from_(bucket_name).download(file_path)
+        
+        logger.info(f"[Storage] 模板下载成功: bucket={bucket_name}, path={file_path}, size={len(file_data)} 字节")
+        return file_data
+        
+    except Exception as e:
+        logger.error(f"[ERR] 模板文件下载失败: bucket={bucket_name}, path={file_path}, error={e}")
         return None
 
 

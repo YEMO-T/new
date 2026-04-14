@@ -47,6 +47,7 @@ import { MarkdownErrorBoundary } from './components/common/ErrorBoundary';
 import { safeMarkdownChildren, preprocessSlideContent } from './utils/textUtils';
 import { getErrorMessage, logError, ApiError } from './utils/errorUtils';
 import SafeMarkdown from './components/common/SafeMarkdown';
+import ExportHistory from './components/ExportHistory';
 
 // --- Components ---
 
@@ -220,10 +221,13 @@ import {
   updateKnowledgeItem,
   renderPptxFromServer,
   renderDocxFromServer,
+  generateFinalPptV2,
   previewRenderedPptx,
   PreviewSlide
 } from './services/api';
+import { saveAs } from 'file-saver';
 import { exportToPPTX, exportToDOCX } from './services/export';
+import { DirectGeneratePanel } from './components/DirectGeneratePanel';
 
 // --- Components ---
 
@@ -428,49 +432,81 @@ const KnowledgeBaseView = ({
   );
 };
 
-const ExportsView = ({ records, onDelete }: { records: any[], onDelete: (id: string) => void }) => {
+const ExportsView = ({ records, onDelete, onDownload }: { 
+  records: any[], 
+  onDelete: (id: string) => void,
+  onDownload?: (id: string) => void,
+  onShowHistory?: () => void
+}) => {
 
   return (
     <div className="flex-1 p-11 h-full overflow-y-auto">
-      <h2 className="text-4xl font-extrabold tracking-tight text-[#161d19] mb-2">📜 导出记录</h2>
-      <p className="text-[#2a6b2c] font-medium mb-10">回顾并下载您生成的所有教学资源</p>
-
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {records.map((record) => (
-          <div key={record.id} className="bg-white p-6 rounded-2xl border border-black/5 shadow-sm hover:shadow-md transition-all group relative">
-            <button 
-              onClick={() => onDelete(record.id)}
-              className="absolute top-4 right-4 p-2 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-full opacity-0 group-hover:opacity-100 transition-all"
-              title="删除记录"
-            >
-              <Trash2 className="w-4 h-4" />
-            </button>
-            <div className="flex justify-between items-start mb-4">
-              <div className="w-12 h-12 rounded-xl bg-[#eef5ee] flex items-center justify-center text-[#0d631b]">
-                <Download className="w-6 h-6" />
-              </div>
-              <span className="px-3 py-1 bg-[#0d631b]/10 text-[#0d631b] text-[10px] font-bold rounded-md">{record.format}</span>
-            </div>
-            <h3 className="font-bold text-[#161d19] mb-1">{record.title}</h3>
-            <p className="text-xs text-[#161d19]/40 mb-4">{record.date} · {record.size}</p>
-            <div className="flex gap-2">
-              {record.fileUrl ? (
-                <a 
-                  href={record.fileUrl} 
-                  target="_blank" 
-                  rel="noopener noreferrer"
-                  className="flex-1 py-2 rounded-full bg-[#0d631b] text-white text-xs font-bold hover:opacity-90 transition-all text-center flex items-center justify-center"
-                >
-                  查看/下载
-                </a>
-              ) : (
-                <button className="flex-1 py-2 rounded-full bg-[#0d631b]/50 text-white text-xs font-bold cursor-not-allowed">链接失效</button>
-              )}
-              <button className="px-4 py-2 rounded-full border border-black/10 text-[#161d19]/60 text-xs font-bold hover:bg-[#f4fbf4] transition-all">详情</button>
-            </div>
-          </div>
-        ))}
+      <div className="flex justify-between items-end mb-2">
+        <div>
+          <h2 className="text-4xl font-extrabold tracking-tight text-[#161d19] mb-2">📜 导出记录</h2>
+          <p className="text-[#2a6b2c] font-medium">回顾并下载您生成的所有教学资源</p>
+        </div>
+        <button 
+          onClick={onShowHistory}
+          className="flex items-center gap-2 bg-[#0d631b] text-white px-6 py-3 rounded-full font-bold shadow-lg hover:opacity-90 transition-all"
+        >
+          <History className="w-5 h-5" />
+          查看完整记录
+        </button>
       </div>
+
+      {records.length === 0 ? (
+        <div className="flex flex-col items-center justify-center py-20">
+          <div className="w-24 h-24 rounded-full bg-[#f4fbf4] flex items-center justify-center mb-6">
+            <Download className="w-12 h-12 text-[#0d631b]/30" />
+          </div>
+          <h3 className="text-xl font-bold text-[#161d19] mb-2">暂无导出记录</h3>
+          <p className="text-sm text-[#161d19]/60">生成并下载PPT后，记录会显示在这里</p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {records.map((record) => (
+            <div key={record.id} className="bg-white p-6 rounded-2xl border border-black/5 shadow-sm hover:shadow-md transition-all group relative">
+              <button 
+                onClick={() => onDelete(record.id)}
+                className="absolute top-4 right-4 p-2 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-full opacity-0 group-hover:opacity-100 transition-all"
+                title="删除记录"
+              >
+                <Trash2 className="w-4 h-4" />
+              </button>
+              <div className="flex justify-between items-start mb-4">
+                <div className="w-12 h-12 rounded-xl bg-[#eef5ee] flex items-center justify-center text-[#0d631b]">
+                  <Download className="w-6 h-6" />
+                </div>
+                <span className="px-3 py-1 bg-[#0d631b]/10 text-[#0d631b] text-[10px] font-bold rounded-md">{record.format}</span>
+              </div>
+              <h3 className="font-bold text-[#161d19] mb-1 line-clamp-2">{record.title}</h3>
+              <p className="text-xs text-[#161d19]/40 mb-4">{record.date} · {record.size}</p>
+              <div className="flex gap-2">
+                {record.fileUrl || record.file_url ? (
+                  <>
+                    <button 
+                      onClick={() => onDownload && onDownload(record.id)}
+                      className="flex-1 py-2 rounded-full bg-[#0d631b] text-white text-xs font-bold hover:opacity-90 transition-all flex items-center justify-center gap-1"
+                    >
+                      <Download className="w-3 h-3" />
+                      重新下载
+                    </button>
+                  </>
+                ) : (
+                  <button className="flex-1 py-2 rounded-full bg-[#0d631b]/50 text-white text-xs font-bold cursor-not-allowed">链接失效</button>
+                )}
+                <button 
+                  onClick={onShowHistory}
+                  className="px-4 py-2 rounded-full border border-black/10 text-[#161d19]/60 text-xs font-bold hover:bg-[#f4fbf4] transition-all"
+                >
+                  详情
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 };
@@ -906,6 +942,23 @@ const PreviewView = ({ slides, lessonPlan, interaction, onExport, currentUser, s
               <FileText className="w-5 h-5" /> 导出教案 (.docx)
             </button>
           </div>
+
+          {/* 一键生成面板（推荐使用） */}
+          {slides.length > 0 && (
+            <div className="max-w-3xl mx-auto mt-10">
+              <DirectGeneratePanel
+                slides={slides.map(s => ({
+                  title: s.title,
+                  content: s.content,
+                  page_type: s.page_type || 'content',
+                  subtitle: '',
+                }))}
+                onGenerated={(result) => {
+                  console.log('[DirectGenerate] 生成完成:', result);
+                }}
+              />
+            </div>
+          )}
         </>
       )}
     </div>
@@ -1089,6 +1142,7 @@ export default function App() {
   const [knowledgeItems, setKnowledgeItems] = useState<KnowledgeItem[]>([]);
   const [templateItems, setTemplateItems] = useState<Template[]>([]);
   const [exportRecords, setExportRecords] = useState<any[]>([]);
+  const [showExportHistory, setShowExportHistory] = useState(false);
 
   // Courseware State
   const [slides, setSlides] = useState<Slide[]>([]);
@@ -1271,22 +1325,74 @@ export default function App() {
         if (!slides || slides.length === 0) {
           throw new Error('没有可导出的幻灯片内容，请先生成课件');
         }
-        
-        const res = await renderPptxFromServer(slides, title, selectedTemplate?.id, lessonPlan, interaction);
-        
-        if (res.file_url) {
-          window.open(res.file_url, '_blank');
+
+        if (selectedTemplate?.id) {
+          console.log('[handleExport] 使用 V2 终极渲染器，templateId:', selectedTemplate.id);
+          try {
+            const v2Result = await generateFinalPptV2(selectedTemplate.id, slides.map((s: any) => ({
+              title: s.title,
+              content: s.content,
+              page_type: s.page_type || s.type || 'content',
+              subtitle: s.subtitle,
+            })), { title, auto_export: true });
+
+            if (v2Result.download_url) {
+              const safeName = title.replace(/[\\/:*?"<>|]/g, '_').substring(0, 50);
+              const response = await fetch(v2Result.download_url);
+              if (response.ok) {
+                const blob = await response.blob();
+                saveAs(blob, `${safeName}.pptx`);
+              } else {
+                throw new Error('下载文件失败');
+              }
+            } else {
+              throw new Error('V2 渲染器未返回下载链接');
+            }
+          } catch (v2Err: any) {
+            console.warn('[handleExport] V2 渲染失败，回退到 V1:', v2Err);
+            const res = await renderPptxFromServer(slides, title, selectedTemplate?.id, lessonPlan, interaction);
+            if (res.file_url) {
+              const safeName = title.replace(/[\\/:*?"<>|]/g, '_').substring(0, 50);
+              const response = await fetch(res.file_url);
+              if (response.ok) {
+                const blob = await response.blob();
+                saveAs(blob, `${safeName}.pptx`);
+              } else {
+                throw new Error('下载文件失败');
+              }
+            } else {
+              throw new Error('服务器未返回文件链接');
+            }
+          }
         } else {
-          throw new Error('服务器未返回文件链接');
+          const res = await renderPptxFromServer(slides, title, undefined, lessonPlan, interaction);
+          if (res.file_url) {
+            const safeName = title.replace(/[\\/:*?"<>|]/g, '_').substring(0, 50);
+            const response = await fetch(res.file_url);
+            if (response.ok) {
+              const blob = await response.blob();
+              saveAs(blob, `${safeName}.pptx`);
+            } else {
+              throw new Error('下载文件失败');
+            }
+          } else {
+            throw new Error('服务器未返回文件链接');
+          }
         }
-      } else {
         if (!lessonPlan) {
           throw new Error('教案内容缺失，无法导出');
         }
         const res = await renderDocxFromServer(title, lessonPlan);
         
         if (res.file_url) {
-          window.open(res.file_url, '_blank');
+          const safeName = title.replace(/[\\/:*?"<>|]/g, '_').substring(0, 50);
+          const response = await fetch(res.file_url);
+          if (response.ok) {
+            const blob = await response.blob();
+            saveAs(blob, `${safeName}.docx`);
+          } else {
+            throw new Error('下载文件失败');
+          }
         } else {
           throw new Error('服务器未返回文件链接');
         }
@@ -1349,7 +1455,20 @@ export default function App() {
         setSelectedTemplate(tpl);
         setActiveTab('dashboard');
       }} />;
-      case 'exports': return <ExportsView records={exportRecords} onDelete={handleDeleteExport} />;
+      case 'exports': return (
+        <ExportsView 
+          records={exportRecords} 
+          onDelete={handleDeleteExport}
+          onDownload={(id) => {
+            const record = exportRecords.find(r => r.id === id);
+            if (record && (record.fileUrl || record.file_url)) {
+              const BASE_URL = process.env.REACT_APP_API_BASE_URL || 'http://localhost:8000/api';
+              window.open(`${BASE_URL}/exports/${id}/download`, '_blank');
+            }
+          }}
+          onShowHistory={() => setShowExportHistory(true)}
+        />
+      );
       case 'settings': return <SettingsView />;
       case 'profile': return <ProfileView currentUser={currentUser} onLogout={handleLogout} />;
       default: return (
@@ -1403,6 +1522,17 @@ export default function App() {
           </AnimatePresence>
         </div>
       </main>
+
+      <ExportHistory
+        isOpen={showExportHistory}
+        onClose={() => setShowExportHistory(false)}
+        onDownload={(exportId) => {
+          console.log('文件已下载:', exportId);
+          setExportRecords(prev => prev.map(r => 
+            r.id === exportId ? { ...r, lastDownloaded: new Date().toISOString() } : r
+          ));
+        }}
+      />
     </div>
   );
 }

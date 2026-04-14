@@ -11,7 +11,7 @@ app = FastAPI(title="豆沙包教师助手 API", version="1.0.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
     expose_headers=["*"],
@@ -37,10 +37,12 @@ async def health_check():
 
 @app.exception_handler(Exception)
 async def catch_all_exceptions(request: Request, exc: Exception):
-    traceback.print_exc()
+    error_id = id(exc)
+    logger.error(f"[Unhandled Exception] id={error_id} path={request.url.path}: {exc}", exc_info=exc)
+    safe_msg = str(exc) if len(str(exc)) < 200 else f"{str(exc)[:200]}..."
     return JSONResponse(
         status_code=500,
-        content={"detail": f"服务器错误：{str(exc)}"}
+        content={"detail": f"服务器内部错误 (id={error_id})", "error_safe": safe_msg}
     )
 
 from api import auth, chat, coursewares, knowledge, templates, templates_v2, exports, ppt_templates
@@ -48,6 +50,9 @@ from api import voice
 from api import rag_knowledge, rag_chat, smart_answer
 from api import vectorization_health
 from api import ppt_generate
+from api import ppt_templates_v2  # 新增：智能模板库 v2
+from api import template_library  # 新增：智能模板库 v3（完整版）
+from api import ppt_direct_generate  # 新增：一键PPT生成模块
 
 app.include_router(auth.router, prefix="/api/auth", tags=["Auth"])
 app.include_router(chat.router, prefix="/api", tags=["Chat"])
@@ -56,7 +61,10 @@ app.include_router(knowledge.router, prefix="/api", tags=["Knowledge"])
 app.include_router(templates.router, prefix="/api", tags=["Templates"])
 app.include_router(templates_v2.router)
 app.include_router(exports.router, prefix="/api", tags=["Exports"])
-app.include_router(ppt_templates.router)
+app.include_router(ppt_templates.router)  # 旧版模板API（保持兼容）
+app.include_router(ppt_templates_v2.router)  # 新增：智能模板库 v2 API
+app.include_router(template_library.router)  # 新增：智能模板库 v3 API（完整版）
+app.include_router(ppt_direct_generate.router)  # 新增：一键PPT生成API
 app.include_router(ppt_generate.router)
 app.include_router(rag_knowledge.router, prefix="/api", tags=["RAG Knowledge"])
 app.include_router(rag_chat.router, prefix="/api", tags=["RAG Chat"])

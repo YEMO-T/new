@@ -529,3 +529,74 @@ def insert_curriculum_standard(
     except Exception as e:
         print(f"Failed to insert curriculum standard: {e}")
         return None
+
+
+def upload_ppt_to_public_bucket(user_id: str, file_name: str, file_data: bytes) -> dict | None:
+    """
+    统一的 PPT 上传到 Supabase 公开桶函数
+    直接上传到 coursewares 桶的 public_ppts 目录，返回公开下载 URL
+    
+    如果云端上传失败，自动回退到本地存储
+    """
+    from datetime import datetime
+
+    # 首先尝试上传到 Supabase 云端存储
+    try:
+        supabase = get_supabase_client()
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        storage_path = f"public_ppts/{user_id}/{timestamp}_{file_name}"
+        content_type = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+        bucket_name = "coursewares"
+        
+        res = supabase.storage.from_(bucket_name).upload(
+            path=storage_path,
+            file=file_data,
+            file_options={"content-type": content_type}
+        )
+        
+        url_res = supabase.storage.from_(bucket_name).get_public_url(storage_path)
+        
+        if url_res and not url_res.startswith('http'):
+            from core.config import settings
+            base_url = settings.SUPABASE_URL.rstrip('/')
+            url_res = f"{base_url}/storage/v1/object/public/{bucket_name}/{storage_path}"
+        
+        logger.info(f"[Storage] PPT 上传成功: bucket={bucket_name}, path={storage_path}")
+        return {
+            "url": url_res,
+            "path": storage_path,
+            "bucket": bucket_name,
+            "success": True
+        }
+            
+    except Exception as e:
+        logger.warning(f"[Storage] PPT 云端上传失败: {e}，回退到本地存储")
+    
+    # 回退到本地存储
+    try:
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        local_dir = os.path.join(base_dir, 'data', 'coursewares', user_id)
+        os.makedirs(local_dir, exist_ok=True)
+        
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        local_file_name = f"{timestamp}_{file_name}"
+        local_path = os.path.join(local_dir, local_file_name)
+        
+        with open(local_path, 'wb') as f:
+            f.write(file_data)
+        
+        # 构建本地访问URL（通过API提供下载）
+        local_url = f"/local/coursewares/{user_id}/{local_file_name}"
+        
+        logger.info(f"[Storage] PPT 已保存到本地: {local_path} ({len(file_data)/1024:.1f} KB)")
+        return {
+            "url": local_url,
+            "path": local_path,
+            "bucket": "local",
+            "success": True,
+            "is_local": True
+        }
+        
+    except Exception as local_err:
+        logger.error(f"[Storage] 本地存储也失败: {local_err}")
+        return None

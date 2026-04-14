@@ -917,3 +917,520 @@ export async function clearChatHistory(): Promise<boolean> {
     return false;
   }
 }
+
+// ========== V2 智能模板库 API ==========
+const V2_BASE = `${BASE_URL}/ppt-templates/v2`;
+
+/** 上传模板并自动提取样式基因 */
+export async function uploadTemplateV2(
+  file: File,
+  title?: string,
+  visibility?: string
+): Promise<{
+  success: boolean;
+  template_id: string;
+  title: string;
+  style_extracted: boolean;
+  style_gene?: {
+    total_layouts?: number;
+    color_scheme?: Record<string, string>;
+    font_scheme?: Record<string, string>;
+    layouts?: any[];
+    summary?: any;
+  };
+  message: string;
+}> {
+  const formData = new FormData();
+  formData.append('file', file);
+  if (title) formData.append('title', title);
+  formData.append('visibility', visibility || 'private');
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 120000);
+
+  try {
+    const response = await fetch(`${V2_BASE}/upload`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${getAuthToken()}` },
+      body: formData,
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      let msg = '上传失败';
+      try { const e = await response.json(); msg = e.detail || msg; } catch {}
+      throw new Error(msg);
+    }
+    const data = await response.json();
+    return data;
+  } catch (err: any) {
+    clearTimeout(timeoutId);
+    if (err.name === 'AbortError') throw new Error('上传超时（超过120秒），请检查文件大小');
+    throw err;
+  }
+}
+
+/** 使用 V2 终极渲染器生成带样式的最终PPT */
+export async function generateFinalPptV2(
+  templateId: string,
+  slides: Array<{ title: string; content?: string | string[]; page_type?: string; subtitle?: string }>,
+  options?: { title?: string; auto_export?: boolean }
+): Promise<{
+  success: boolean;
+  export_id: string;
+  download_url: string;
+  file_name: string;
+  slide_count: number;
+  generated_at: string;
+}> {
+  const normalizedSlides = slides.map(s => ({
+    title: s.title || '',
+    subtitle: s.subtitle || '',
+    content: typeof s.content === 'string'
+      ? (s.content.trim() ? [s.content.trim()] : [])
+      : Array.isArray(s.content) ? s.content : [],
+    page_type: s.page_type || 'content',
+  }));
+
+  const body = {
+    title: options?.title || '生成的演示文稿',
+    slides: normalizedSlides,
+    auto_export: options?.auto_export ?? true,
+  };
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 180000);
+
+  try {
+    const response = await fetch(`${V2_BASE}/${templateId}/generate`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${getAuthToken()}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      let msg = '生成失败';
+      try { const e = await response.json(); msg = e.detail || msg; } catch {}
+      throw new Error(msg);
+    }
+    return await response.json();
+  } catch (err: any) {
+    clearTimeout(timeoutId);
+    if (err.name === 'AbortError') throw new Error('PPT生成超时（超过180秒）');
+    throw err;
+  }
+}
+
+/** 获取模板的完整样式信息 */
+export async function getTemplateStyleV2(templateId: string): Promise<{
+  success: boolean;
+  template_id: string;
+  style_data: {
+    color_scheme?: Record<string, string>;
+    font_scheme?: Record<string, string>;
+    layouts?: any[];
+    total_layouts?: number;
+    summary?: any;
+  };
+}> {
+  const response = await fetch(`${V2_BASE}/${templateId}/style`, {
+    headers: { 'Authorization': `Bearer ${getAuthToken()}` },
+  });
+  if (!response.ok) {
+    const e = await response.json().catch(() => ({}));
+    throw new Error(e.detail || '获取样式失败');
+  }
+  return await response.json();
+}
+
+// ========== 智能模板库 V3 API（完整版） ==========
+const LIB_BASE = `${BASE_URL}/template-library`;
+
+/** 上传模板并自动提取完整样式基因 */
+export async function uploadTemplateV3(
+  file: File,
+  title?: string,
+  visibility?: 'private' | 'public'
+): Promise<{
+  success: boolean;
+  template_id: string;
+  title: string;
+  message: string;
+  style_extracted: boolean;
+  style_summary?: {
+    primary_color: string;
+    title_font: string;
+    body_font: string;
+    layout_count: number;
+    aspect_ratio: string;
+    has_style: boolean;
+  };
+}> {
+  const formData = new FormData();
+  formData.append('file', file);
+  if (title) formData.append('title', title);
+  formData.append('visibility', visibility || 'private');
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 120000);
+
+  try {
+    const response = await fetch(`${LIB_BASE}/upload`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${getAuthToken()}` },
+      body: formData,
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+    
+    if (!response.ok) {
+      let msg = '上传失败';
+      try { const e = await response.json(); msg = e.detail || msg; } catch {}
+      throw new Error(msg);
+    }
+    return await response.json();
+  } catch (err: any) {
+    clearTimeout(timeoutId);
+    if (err.name === 'AbortError') throw new Error('上传超时');
+    throw err;
+  }
+}
+
+/** 获取模板列表（含样式摘要） */
+export async function getTemplateListV3(
+  type: 'personal' | 'public' = 'personal',
+  page: number = 1,
+  pageSize: number = 20,
+  search: string = ''
+): Promise<{
+  success: boolean;
+  templates: Array<{
+    id: string;
+    title: string;
+    created_at: string;
+    usage_count: number;
+    file_size: number;
+    style_preview: {
+      primary_color: string;
+      title_font: string;
+      body_font: string;
+      layout_count: number;
+      aspect_ratio: string;
+      has_style: boolean;
+    };
+  }>;
+  total: number;
+  page: number;
+  page_size: number;
+}> {
+  const params = new URLSearchParams();
+  params.append('template_type', type);
+  params.append('page', String(page));
+  params.append('page_size', String(pageSize));
+  if (search) params.append('search', search);
+
+  const response = await fetch(`${LIB_BASE}/list?${params}`, {
+    headers: getAuthHeaders()
+  });
+  
+  if (!response.ok) {
+    const e = await response.json().catch(() => ({}));
+    throw new Error(e.detail || '获取模板列表失败');
+  }
+  return await response.json();
+}
+
+/** 获取模板完整样式数据（供PPT生成模块使用） */
+export async function getTemplateStyleV3(templateId: string): Promise<{
+  success: boolean;
+  template_id: string;
+  style_data: {
+    colors: Record<string, string>;
+    fonts: Record<string, string>;
+    layouts: Array<any>;
+    master: Record<string, any>;
+  };
+}> {
+  const response = await fetch(`${LIB_BASE}/${templateId}/style`, {
+    headers: getAuthHeaders(),
+  });
+  
+  if (!response.ok) {
+    const e = await response.json().catch(() => ({}));
+    throw new Error(e.detail || '获取样式失败');
+  }
+  return await response.json();
+}
+
+/** 获取模板详情（含完整样式和元数据） */
+export async function getTemplateDetailV3(templateId: string) {
+  const response = await fetch(`${LIB_BASE}/${templateId}/detail`, {
+    headers: getAuthHeaders(),
+  });
+  
+  if (!response.ok) return null;
+  const data = await response.json();
+  return data.template || null;
+}
+
+/** 使用模板生成最终渲染好的 PPT */
+export async function generatePptWithTemplate(
+  templateId: string,
+  slides: Array<{ title: string; subtitle?: string; content?: string | string[]; page_type?: string }>,
+  options?: { title?: string; auto_export?: boolean }
+): Promise<{
+  success: boolean;
+  export_id: string;
+  download_url: string;
+  file_name: string;
+  slide_count: number;
+  engine_used: string;
+}> {
+  const normalizedSlides = slides.map(s => ({
+    title: s.title || '',
+    subtitle: s.subtitle || '',
+    content: typeof s.content === 'string'
+      ? (s.content.trim() ? [s.content.trim()] : [])
+      : Array.isArray(s.content) ? s.content : [],
+    page_type: s.page_type || 'content',
+  }));
+
+  const body = {
+    title: options?.title || '生成的演示文稿',
+    slides: normalizedSlides,
+    auto_export: options?.auto_export ?? true,
+  };
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 180000);
+
+  try {
+    const response = await fetch(`${LIB_BASE}/${templateId}/generate`, {
+      method: 'POST',
+      headers: {
+        ...getAuthHeaders(),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      let msg = '生成失败';
+      try { const e = await response.json(); msg = e.detail || msg; } catch {}
+      throw new Error(msg);
+    }
+    return await response.json();
+  } catch (err: any) {
+    clearTimeout(timeoutId);
+    if (err.name === 'AbortError') throw new Error('PPT生成超时');
+    throw err;
+  }
+}
+
+/** 删除模板 */
+export async function deleteTemplateV3(templateId: string): Promise<{ success: boolean; message: string }> {
+  const response = await fetch(`${LIB_BASE}/${templateId}`, {
+    method: 'DELETE',
+    headers: getAuthHeaders(),
+  });
+  
+  if (!response.ok) {
+    const e = await response.json().catch(() => ({}));
+    throw new Error(e.detail || '删除失败');
+  }
+  return await response.json();
+}
+
+/** 复制公共模板到个人库 */
+export async function copyTemplateV3(templateId: string): Promise<{
+  success: boolean;
+  message: string;
+  new_template_id?: string;
+}> {
+  const response = await fetch(`${LIB_BASE}/${templateId}/copy`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+  });
+  
+  if (!response.ok) {
+    const e = await response.json().catch(() => ({}));
+    throw new Error(e.detail || '复制失败');
+  }
+  return await response.json();
+}
+
+/** 重新提取模板样式 */
+export async function reextractTemplateStyle(templateId: string): Promise<{
+  success: boolean;
+  message: string;
+  style_summary?: any;
+}> {
+  const response = await fetch(`${LIB_BASE}/${templateId}/reextract`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+  });
+  
+  if (!response.ok) {
+    const e = await response.json().catch(() => ({}));
+    throw new Error(e.detail || '重新提取失败');
+  }
+  return await response.json();
+}
+
+// ========== 一键PPT生成 API（直接输出渲染好的文件） ==========
+const DIRECT_BASE = `${BASE_URL}/ppt`;
+
+/** 一键生成PPT（传入slides数据，直接返回文件） */
+export async function generatePptDirect(
+  templateId: string,
+  title: string,
+  slides: Array<{ title: string; subtitle?: string; content?: string | string[]; page_type?: string }>,
+): Promise<{
+  success: boolean;
+  message: string;
+  file_name: string;
+  file_size: number;
+  slide_count: number;
+  engine_used: string;
+  style_applied: boolean;
+  download_url: string | null;
+  generation_time: number;
+}> {
+  const normalizedSlides = slides.map(s => ({
+    title: s.title || '',
+    subtitle: s.subtitle || '',
+    content: typeof s.content === 'string'
+      ? (s.content.trim() ? [s.content.trim()] : [])
+      : Array.isArray(s.content) ? s.content : [],
+    page_type: s.page_type || 'content',
+  }));
+
+  const body = {
+    title,
+    template_id: templateId,
+    slides: normalizedSlides,
+    auto_download: true,
+  };
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 180000);
+
+  try {
+    const response = await fetch(`${DIRECT_BASE}/generate-direct`, {
+      method: 'POST',
+      headers: {
+        ...getAuthHeaders(),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      let msg = '生成失败';
+      try { const e = await response.json(); msg = e.detail || msg; } catch {}
+      throw new Error(msg);
+    }
+    return await response.json();
+  } catch (err: any) {
+    clearTimeout(timeoutId);
+    if (err.name === 'AbortError') throw new Error('PPT生成超时');
+    throw err;
+  }
+}
+
+/** 从主题一键生成PPT（全自动：LLM生成内容+应用样式+输出文件） */
+export async function generatePptFromTopic(
+  topic: string,
+  templateId: string,
+  options?: {
+    title?: string;
+    grade?: string;
+    subject?: string;
+    slideCount?: number;
+  },
+): Promise<{
+  success: boolean;
+  message: string;
+  file_name: string;
+  file_size: number;
+  slide_count: number;
+  engine_used: string;
+  style_applied: boolean;
+  download_url: string | null;
+  generation_time: number;
+}> {
+  const body = {
+    topic,
+    template_id: templateId,
+    title: options?.title || '',
+    grade: options?.grade || '',
+    subject: options?.subject || '',
+    slide_count: options?.slideCount || 10,
+    auto_download: true,
+  };
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 300000); // 5分钟（含LLM时间）
+
+  try {
+    const response = await fetch(`${DIRECT_BASE}/generate-from-topic`, {
+      method: 'POST',
+      headers: {
+        ...getAuthHeaders(),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      let msg = '生成失败';
+      try { const e = await response.json(); msg = e.detail || msg; } catch {}
+      throw new Error(msg);
+    }
+    return await response.json();
+  } catch (err: any) {
+    clearTimeout(timeoutId);
+    if (err.name === 'AbortError') throw new Error('PPT生成超时（可能LLM响应较慢）');
+    throw err;
+  }
+}
+
+/** 获取可用模板列表（含样式摘要） */
+export async function getTemplatesWithStyle(): Promise<{
+  success: boolean;
+  templates: Array<{
+    id: string;
+    title: string;
+    usage_count: number;
+    style_preview: {
+      primary_color: string;
+      title_font: string;
+      body_font: string;
+      layout_count: number;
+      has_style: boolean;
+    };
+  }>;
+  total: number;
+}> {
+  const response = await fetch(`${DIRECT_BASE}/templates-with-style`, {
+    headers: getAuthHeaders(),
+  });
+
+  if (!response.ok) {
+    const e = await response.json().catch(() => ({}));
+    throw new Error(e.detail || '获取模板列表失败');
+  }
+  return await response.json();
+}

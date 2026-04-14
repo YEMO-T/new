@@ -87,7 +87,7 @@ def check_user_role(user_id: str) -> dict:
     返回: {"is_admin": bool, "role": str}
     """
     try:
-        supabase = get_supabase_with_retry()
+        supabase = get_supabase_client()
         response = supabase.table('users').select('role').eq('id', user_id).execute()
         
         if response.data:
@@ -139,7 +139,7 @@ def download_template_from_storage(template_id: str, template_info: dict) -> Opt
     
     for attempt in range(max_retries):
         try:
-            supabase = get_supabase_with_retry()
+            supabase = get_supabase_client()
             
             storage_path = template_info.get('file_path') or template_info.get('storage_path')
             if not storage_path:
@@ -891,7 +891,7 @@ async def download_template(
                 detail="没有权限下载此模板"
             )
         
-        supabase = get_supabase_with_retry()
+        supabase = get_supabase_client()
         try:
             supabase.table('user_templates').update({
                 'usage_count': (template.get('usage_count', 0) + 1)
@@ -979,7 +979,7 @@ async def delete_template(
         
         delete_local_file(template_id)
         
-        supabase = get_supabase_with_retry()
+        supabase = get_supabase_client()
         supabase.table('user_templates').delete().eq('id', template_id).execute()
         
         logger.info(f"[OK] 模板删除成功: {template_id}, 删除者: {user_id}")
@@ -1011,7 +1011,7 @@ async def copy_template(
     - template_id: 源模板ID
     """
     try:
-        supabase = get_supabase_with_retry()
+        supabase = get_supabase_client()
         
         source = get_template_by_id(template_id)
         if not source:
@@ -1391,7 +1391,7 @@ async def generate_ppt_from_template(
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         file_name = f"{request.title}_{timestamp}.pptx"
         
-        supabase = get_supabase_with_retry()
+        supabase = get_supabase_client()
         
         storage_path = f"generated/{user_id}/{timestamp}_{file_name}"
         

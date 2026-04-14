@@ -5,14 +5,28 @@ import {
   getPptTemplateById,
   deletePptTemplate,
   copyPptTemplate,
-  uploadTemplate,
-  getTemplateCategories
+  uploadTemplateV2,
+  getTemplateCategories,
+  getTemplateListV3,
+  uploadTemplateV3,
+  deleteTemplateV3,
+  copyTemplateV3,
+  reextractTemplateStyle
 } from '../services/api';
 import { PPTSlidePreview } from './PPTSlidePreview';
 import { SupabaseImage } from './SupabaseImage';
 import './TemplateLibraryPage.css';
 
 const BASE_URL = process.env.REACT_APP_API_BASE_URL || 'http://localhost:8000/api';
+
+interface StylePreview {
+  primary_color: string;
+  title_font: string;
+  body_font: string;
+  layout_count: number;
+  aspect_ratio: string;
+  has_style: boolean;
+}
 
 export interface TemplateLibraryPageProps {
   onSelectTemplate?: (template: PPTTemplate) => void;
@@ -34,6 +48,10 @@ export const TemplateLibraryPage: React.FC<TemplateLibraryPageProps> = ({ onSele
   const [currentPage, setCurrentPage] = useState(1);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  
+  // 新增：样式预览数据
+  const [stylePreviews, setStylePreviews] = useState<Record<string, StylePreview>>({});
+  const [useV3API, setUseV3API] = useState(true);
 
   useEffect(() => {
     loadCategories();
@@ -62,50 +80,104 @@ export const TemplateLibraryPage: React.FC<TemplateLibraryPageProps> = ({ onSele
   const loadTemplates = async (retryAttempt = 0) => {
     setLoading(true);
     try {
-      const templateType = activeTab === 'my' ? 'personal' : 'public';
-      const result = await getPptTemplateList(templateType, currentPage, 20);
+      if (useV3API) {
+        // 使用新的 V3 API（含样式摘要）
+        const templateType = activeTab === 'my' ? 'personal' : 'public';
+        const result = await getTemplateListV3(templateType, currentPage, 20, searchQuery);
+        
+        let data: PPTTemplate[] = result.templates.map((t: any) => ({
+          id: t.id,
+          user_id: '',
+          title: t.title || '',
+          description: '',
+          category: '',
+          visibility: activeTab === 'public' ? 'public' : 'private',
+          thumbnail: undefined,
+          usageCount: t.usage_count || 0,
+          createdAt: t.created_at,
+          updatedAt: t.created_at,
+          originalFileName: '',
+          originalFileSize: formatFileSize(t.file_size),
+          templateData: {
+            slidesStructure: [],
+            themeColors: {},
+            fonts: {},
+            placeholders: {},
+          },
+          themeColors: { primary: t.style_preview?.primary_color },
+          fonts: { title: t.style_preview?.title_font, body: t.style_preview?.body_font },
+          has_original_file: true,
+          file_path: '',
+          file_bucket: '',
+          _stylePreview: t.style_preview || {} as StylePreview,
+        }));
+        
+        if (sortBy === 'popular') {
+          data.sort((a, b) => b.usageCount - a.usageCount);
+        } else if (sortBy === 'name') {
+          data.sort((a, b) => a.title.localeCompare(b.title));
+        }
+        
+        setTemplates(data);
+        setTotalTemplates(result.total);
+        
+        // 存储样式预览
+        const previews: Record<string, StylePreview> = {};
+        result.templates.forEach((t: any) => {
+          if (t.id && t.style_preview) {
+            previews[t.id] = t.style_preview;
+          }
+        });
+        setStylePreviews(previews);
+        
+      } else {
+        // 回退到旧版 API
+        const templateType = activeTab === 'my' ? 'personal' : 'public';
+        const result = await getPptTemplateList(templateType, currentPage, 20);
+        
+        let data: PPTTemplate[] = result.templates.map((t: any) => ({
+          id: t.id,
+          user_id: t.user_id,
+          title: t.title || '',
+          description: t.description || '',
+          category: t.category || '',
+          visibility: t.visibility || 'private',
+          thumbnail: t.thumbnail_url,
+          usageCount: t.usage_count || 0,
+          createdAt: t.created_at,
+          updatedAt: t.updated_at,
+          originalFileName: t.original_file_name,
+          originalFileSize: t.original_file_size,
+          templateData: {
+            slidesStructure: t.slides_structure || [],
+            themeColors: t.theme_colors || {},
+            fonts: t.fonts || {},
+            placeholders: t.placeholders || {},
+          },
+          themeColors: t.theme_colors,
+          fonts: t.fonts,
+          has_original_file: t.has_original_file || false,
+          file_path: t.file_path,
+          file_bucket: t.file_bucket,
+        }));
+
+        if (searchQuery) {
+          data = data.filter(t =>
+            t.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
+            t.description.toLowerCase().includes(searchQuery.toLowerCase())
+          );
+        }
+
+        if (sortBy === 'popular') {
+          data.sort((a, b) => b.usageCount - a.usageCount);
+        } else if (sortBy === 'name') {
+          data.sort((a, b) => a.title.localeCompare(b.title));
+        }
+
+        setTemplates(data);
+        setTotalTemplates(result.total);
+      }
       
-      let data: PPTTemplate[] = result.templates.map((t: any) => ({
-        id: t.id,
-        user_id: t.user_id,
-        title: t.title || '',
-        description: t.description || '',
-        category: t.category || '',
-        visibility: t.visibility || 'private',
-        thumbnail: t.thumbnail_url,
-        usageCount: t.usage_count || 0,
-        createdAt: t.created_at,
-        updatedAt: t.updated_at,
-        originalFileName: t.original_file_name,
-        originalFileSize: t.original_file_size,
-        templateData: {
-          slidesStructure: t.slides_structure || [],
-          themeColors: t.theme_colors || {},
-          fonts: t.fonts || {},
-          placeholders: t.placeholders || {},
-        },
-        themeColors: t.theme_colors,
-        fonts: t.fonts,
-        has_original_file: t.has_original_file || false,
-        file_path: t.file_path,
-        file_bucket: t.file_bucket,
-      }));
-
-      if (searchQuery) {
-        data = data.filter(t =>
-          t.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-          t.description.toLowerCase().includes(searchQuery.toLowerCase())
-        );
-      }
-
-      if (sortBy === 'popular') {
-        data.sort((a, b) => b.usageCount - a.usageCount);
-      } else if (sortBy === 'name') {
-        data.sort((a, b) => a.title.localeCompare(b.title));
-      }
-
-      setTemplates(data);
-      setTotalTemplates(result.total);
       setRetryCount(0);
     } catch (error: any) {
       console.error('加载模板失败:', error);
@@ -128,23 +200,54 @@ export const TemplateLibraryPage: React.FC<TemplateLibraryPageProps> = ({ onSele
     }
   };
 
+  const formatFileSize = (bytes?: number): string => {
+    if (!bytes) return '';
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  };
+
   const handleUpload = async (file: File, title: string, description: string, visibility: 'private' | 'public') => {
     setUploading(true);
     try {
-      const formData = new FormData();
-      formData.append('file', file);
-      formData.append('title', title);
-      formData.append('description', description);
-      formData.append('category', '');
-      formData.append('visibility', visibility);
+      // 使用新的 V3 API（自动提取完整样式）
+      const result = await uploadTemplateV3(file, title || undefined, visibility);
 
-      await uploadTemplate(formData);
+      if (result.style_extracted && result.style_summary) {
+        const summary = result.style_summary;
+        showToast(
+          `✅ 模板上传成功！已提取 ${summary.layout_count} 个版式` +
+          ` | 主色调: ${summary.primary_color || '未知'}` +
+          ` | 字体: ${summary.title_font || '默认'}`
+        );
+      } else if (result.style_extracted) {
+        showToast('✅ 模板上传成功！样式已提取');
+      } else {
+        showToast('模板上传成功（样式提取跳过）');
+      }
+
       setShowUploadModal(false);
-      showToast('模板上传成功！');
       loadTemplates();
     } catch (error) {
       console.error('上传失败:', error);
-      showToast('上传失败: ' + (error instanceof Error ? error.message : '未知错误'), 'error');
+      
+      // 如果 V3 API 失败，尝试回退到旧版 API
+      try {
+        console.log('[TemplateLib] 尝试回退到旧版上传API...');
+        const fallbackResult = await uploadTemplateV2(file, title || undefined, visibility);
+        
+        if (fallbackResult.style_extracted) {
+          showToast(`模板上传成功（兼容模式）`);
+        } else {
+          showToast('模板上传成功（样式提取跳过）');
+        }
+        
+        setShowUploadModal(false);
+        loadTemplates();
+      } catch (fallbackError) {
+        console.error('回退也失败:', fallbackError);
+        showToast('上传失败: ' + (error instanceof Error ? error.message : '未知错误'), 'error');
+      }
     } finally {
       setUploading(false);
     }
@@ -158,23 +261,71 @@ export const TemplateLibraryPage: React.FC<TemplateLibraryPageProps> = ({ onSele
     }
     
     try {
-      await deletePptTemplate(templateId);
-      showToast('模板已删除');
-      loadTemplates();
-    } catch (error) {
+      // 使用 V3 API
+      await deleteTemplateV3(templateId);
+      showToast('✅ 模板已删除');
+      
+      // 更新本地状态
+      setTemplates(prev => prev.filter(t => t.id !== templateId));
+      if (stylePreviews[templateId]) {
+        const newPreviews = { ...stylePreviews };
+        delete newPreviews[templateId];
+        setStylePreviews(newPreviews);
+      }
+    } catch (error: any) {
       console.error('删除失败:', error);
-      showToast('删除失败: ' + (error instanceof Error ? error.message : '未知错误'), 'error');
+      
+      // 回退到旧版
+      try {
+        await deletePptTemplate(templateId);
+        showToast('模板已删除（兼容模式）');
+        loadTemplates();
+      } catch {
+        showToast('删除失败: ' + (error instanceof Error ? error.message : '未知错误'), 'error');
+      }
     }
     setDeleteConfirm(null);
   };
 
   const handleCopy = async (templateId: string) => {
     try {
-      await copyPptTemplate(templateId);
-      showToast('模板已复制到个人库');
-    } catch (error) {
+      // 使用 V3 API
+      const result = await copyTemplateV3(templateId);
+      if (result.new_template_id) {
+        showToast(`✅ 已复制到个人库`);
+      } else {
+        showToast(result.message || '模板已复制到个人库');
+      }
+    } catch (error: any) {
       console.error('复制失败:', error);
-      showToast('复制失败: ' + (error instanceof Error ? error.message : '未知错误'), 'error');
+      
+      // 回退
+      try {
+        await copyPptTemplate(templateId);
+        showToast('模板已复制到个人库（兼容模式）');
+      } catch {
+        showToast('复制失败: ' + (error instanceof Error ? error.message : '未知错误'), 'error');
+      }
+    }
+  };
+  
+  const handleReextract = async (templateId: string) => {
+    try {
+      showToast('正在重新提取样式...', 'success');
+      const result = await reextractTemplateStyle(templateId);
+      
+      if (result.success && result.style_summary) {
+        showToast(`✅ 样式重新提取成功！主色调: ${result.style_summary.primary_color || '未知'}`);
+        
+        // 刷新列表以显示新样式
+        loadTemplates();
+      } else {
+        showToast(result.message || '样式重新提取完成');
+        loadTemplates();
+      }
+    } catch (error: any) {
+      console.error('重新提取失败:', error);
+      showToast('重新提取失败: ' + (error instanceof Error ? error.message : '未知错误'), 'error');
     }
   };
 
@@ -345,11 +496,74 @@ export const TemplateLibraryPage: React.FC<TemplateLibraryPageProps> = ({ onSele
                       {template.visibility === 'public' && (
                         <span className="badge-public">公共</span>
                       )}
+                      
+                      {/* 样式预览徽章 */}
+                      {(template as any)._stylePreview?.has_style && (
+                        <>
+                          {(template as any)._stylePreview?.primary_color && (
+                            <span 
+                              className="badge-color" 
+                              title={`主色调: ${(template as any)._stylePreview.primary_color}`}
+                              style={{
+                                backgroundColor: (template as any)._stylePreview.primary_color,
+                                color: '#fff',
+                                padding: '2px 6px',
+                                borderRadius: '4px',
+                                fontSize: '10px',
+                                marginLeft: '4px',
+                              }}
+                            >
+                              ●
+                            </span>
+                          )}
+                          {(template as any)._stylePreview?.layout_count > 0 && (
+                            <span className="badge-layout" title={`${(template as any)._stylePreview.layout_count} 个版式`}>
+                              📐{(template as any)._stylePreview.layout_count}
+                            </span>
+                          )}
+                        </>
+                      )}
                     </div>
                   </div>
 
                   <div className="card-info">
                     <h3 title={template.title}>{template.title}</h3>
+                    
+                    {/* 样式摘要 */}
+                    {(template as any)._stylePreview?.has_style && (
+                      <div className="style-summary" style={{ 
+                        display: 'flex', 
+                        gap: '8px', 
+                        fontSize: '11px', 
+                        color: '#666', 
+                        marginBottom: '4px',
+                        flexWrap: 'wrap',
+                        alignItems: 'center',
+                      }}>
+                        {(template as any)._stylePreview.primary_color && (
+                          <span style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
+                            <span style={{ 
+                              width: '12px', height: '12px', borderRadius: '3px', 
+                              backgroundColor: (template as any)._stylePreview.primary_color,
+                              border: '1px solid #ddd',
+                            }}></span>
+                            色调
+                          </span>
+                        )}
+                        {(template as any)._stylePreview.title_font && (
+                          <span style={{ fontFamily: (template as any)._stylePreview.title_font }}>
+                            标题: {(template as any)._stylePreview.title_font}
+                          </span>
+                        )}
+                        {(template as any)._stylePreview.body_font && (
+                          <span>正文: {(template as any)._stylePreview.body_font}</span>
+                        )}
+                        {(template as any)._stylePreview.aspect_ratio && (
+                          <span>{(template as any)._stylePreview.aspect_ratio}</span>
+                        )}
+                      </div>
+                    )}
+                    
                     <p className="description" title={template.description}>{template.description || '暂无描述'}</p>
                     
                     <div className="card-meta">
@@ -375,6 +589,19 @@ export const TemplateLibraryPage: React.FC<TemplateLibraryPageProps> = ({ onSele
                     >
                       预览
                     </button>
+                    
+                    {/* 重新提取样式按钮（仅当没有样式或用户主动触发时显示） */}
+                    {activeTab === 'my' && !(template as any)._stylePreview?.has_style && (
+                      <button 
+                        className="btn-small btn-warning"
+                        onClick={() => handleReextract(template.id)}
+                        title="重新提取模板样式"
+                        style={{ fontSize: '10px', padding: '4px 8px' }}
+                      >
+                        🎨 提取样式
+                      </button>
+                    )}
+                    
                     <button 
                       className="btn-small btn-primary"
                       onClick={() => onSelectTemplate?.(template)}

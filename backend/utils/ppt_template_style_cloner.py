@@ -385,7 +385,6 @@ class TemplateStyleCloner:
                 PP_PLACEHOLDER.SUBTITLE: 'subtitle',
                 PP_PLACEHOLDER.BODY: 'body',
                 PP_PLACEHOLDER.OBJECT: 'body',
-                PP_PLACEHOLDER.CONTENT: 'body',
                 PP_PLACEHOLDER.VERTICAL_BODY: 'body',
                 PP_PLACEHOLDER.VERTICAL_TITLE: 'title',
                 PP_PLACEHOLDER.PICTURE: 'picture',

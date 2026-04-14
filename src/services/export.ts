@@ -2,18 +2,76 @@ import PptxGenJS from "pptxgenjs";
 import { Document, Packer, Paragraph, TextRun, HeadingLevel } from "docx";
 import { saveAs } from "file-saver";
 import { Slide, LessonPlan } from "../types";
-import { renderPptxFromServer, renderDocxFromServer } from "./api";
+import { renderPptxFromServer, renderDocxFromServer, generateFinalPptV2 } from "./api";
 
-/**
- * 导出 PPT (优先使用后端 Python 生成)
- */
-export async function exportToPPTX(slides: Slide[], templateId?: string) {
+function triggerDownload(url: string, fileName?: string) {
+  const link = document.createElement('a');
+  link.href = url;
+  if (fileName) {
+    link.download = fileName;
+  }
+  link.style.display = 'none';
+  document.body.appendChild(link);
+  link.click();
+  setTimeout(() => {
+    document.body.removeChild(link);
+  }, 100);
+}
+
+async function fetchAndDownload(url: string, fileName: string) {
   try {
-    await renderPptxFromServer(slides, slides[0]?.title || "新建课件", templateId);
-    return;
-  } catch (error) {
-    console.error('Backend PPTX export failed, falling back to client-side:', error);
-    // 前端回退方案
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const blob = await response.blob();
+    saveAs(blob, fileName);
+  } catch (err) {
+    console.warn('[export] fetch下载失败，回退到window.open:', err);
+    window.open(url, '_blank');
+  }
+}
+
+export async function exportToPPTX(slides: Slide[], templateId?: string, title?: string) {
+  const defaultTitle = title || slides[0]?.title || '新建课件';
+  const safeFileName = defaultTitle.replace(/[\\/:*?"<>|]/g, '_').substring(0, 50);
+
+  if (templateId) {
+    try {
+      console.log('[export] 使用 V2 终极渲染器生成PPT，templateId:', templateId);
+      const result = await generateFinalPptV2(templateId, slides.map(s => ({
+        title: s.title,
+        content: s.content,
+        page_type: s.type || 'content',
+      })), { title: defaultTitle });
+
+      if (result.download_url) {
+        if (result.download_url.startsWith('http')) {
+          await fetchAndDownload(result.download_url, `${safeFileName}.pptx`);
+        } else {
+          triggerDownload(result.download_url, `${safeFileName}.pptx`);
+        }
+        return;
+      } else {
+        console.warn('[export] V2渲染器未返回download_url，尝试回退');
+      }
+    } catch (v2Error) {
+      console.warn('[export] V2 渲染失败，回退到 V1:', v2Error);
+    }
+
+    try {
+      const res = await renderPptxFromServer(slides, defaultTitle, templateId);
+      if (res.file_url) {
+        if (res.file_url.startsWith('http')) {
+          await fetchAndDownload(res.file_url, `${safeFileName}.pptx`);
+        } else {
+          triggerDownload(res.file_url, `${safeFileName}.pptx`);
+        }
+        return;
+      }
+    } catch (error) {
+      console.error('Backend PPTX export failed:', error);
+    }
+
+    console.warn('[export] 所有后端下载方式失败，使用前端客户端回退生成PPT');
     const pptx = new PptxGenJS();
     slides.forEach(slide => {
       const pptSlide = pptx.addSlide();
@@ -37,57 +95,60 @@ export async function exportToPPTX(slides: Slide[], templateId?: string) {
         });
       }
     });
-    await pptx.writeFile({ fileName: "豆沙包课件.pptx" });
+    await pptx.writeFile({ fileName: `${safeFileName}.pptx` });
   }
 }
 
-/**
- * 导出教案 (优先使用后端 Python 生成)
- */
 export async function exportToDOCX(lessonPlan: LessonPlan) {
   try {
-    await renderDocxFromServer(lessonPlan.title, lessonPlan);
-    return;
+    const res = await renderDocxFromServer(lessonPlan.title, lessonPlan);
+    if (res && res.file_url) {
+      const safeName = lessonPlan.title.replace(/[\\/:*?"<>|]/g, '_').substring(0, 50);
+      if (res.file_url.startsWith('http')) {
+        await fetchAndDownload(res.file_url, `${safeName}.docx`);
+      } else {
+        triggerDownload(res.file_url, `${safeName}.docx`);
+      }
+      return;
+    }
   } catch (error) {
     console.error('Backend DOCX export failed, falling back to client-side:', error);
-    // 前端回退方案
-    const doc = new Document({
-      sections: [{
-        properties: {},
-        children: [
-          new Paragraph({
-            text: lessonPlan.title,
-            heading: HeadingLevel.HEADING_1,
-          }),
-          new Paragraph({ text: "" }),
-          new Paragraph({
-            text: "教学目标",
-            heading: HeadingLevel.HEADING_2,
-          }),
-          ...lessonPlan.objectives.map(obj => new Paragraph({ text: `• ${obj}` })),
-          new Paragraph({ text: "" }),
-          new Paragraph({
-            text: "教学过程",
-            heading: HeadingLevel.HEADING_2,
-          }),
-          ...lessonPlan.process.flatMap(p => [
-            new Paragraph({
-              children: [
-                new TextRun({ text: `${p.stage} (${p.duration})`, bold: true }),
-              ],
-            }),
-            new Paragraph({ text: p.content }),
-            new Paragraph({ text: "" }),
-          ]),
-          new Paragraph({
-            text: "课后作业",
-            heading: HeadingLevel.HEADING_2,
-          }),
-          new Paragraph({ text: lessonPlan.homework }),
-        ],
-      }],
-    });
-    const blob = await Packer.toBlob(doc);
-    saveAs(blob, "豆沙包教案.docx");
   }
+
+  const doc = Document({
+    sections: [{
+      properties: {},
+      children: [
+        Paragraph({
+          text: lessonPlan.title,
+          heading: HeadingLevel.HEADING_1,
+        }),
+        Paragraph({ text: "" }),
+        Paragraph({
+          text: "教学目标",
+          heading: HeadingLevel.HEADING_2,
+        }),
+        ...lessonPlan.objectives.map(obj => Paragraph({ text: `• ${obj}` })),
+        Paragraph({ text: "" }),
+        Paragraph({
+          text: "教学过程",
+          heading: HeadingLevel.HEADING_2,
+        }),
+        ...lessonPlan.process.flatMap(p => [
+          Paragraph({
+            children: [TextRun({ text: `${p.stage} (${p.duration})`, bold: true })],
+          }),
+          Paragraph({ text: p.content }),
+          Paragraph({ text: "" }),
+        ]),
+        Paragraph({
+          text: "课后作业",
+          heading: HeadingLevel.HEADING_2,
+        }),
+        Paragraph({ text: lessonPlan.homework }),
+      ],
+    }],
+  });
+  const blob = await Packer.toBlob(doc);
+  saveAs(blob, `${lessonPlan.title.replace(/[\\/:*?"<>|]/g, '_')}.docx`);
 }

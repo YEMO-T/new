@@ -3,7 +3,7 @@ uvicorn
 pydantic[email]
 python-dotenv
 openai
-supabase>=2.0.0
+supabase==0.6.0
 python-pptx
 python-docx
 PyJWT
@@ -14,7 +14,4 @@ sentence-transformers>=2.2.0
 numpy>=1.21.0
 Pillow>=9.0.0
 comtypes>=1.2.0
-langchain>=0.1.0
-langchain-community>=0.0.20
-langchain-huggingface>=0.0.1
 requests>=2.28.0

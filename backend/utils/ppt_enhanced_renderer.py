@@ -773,50 +773,59 @@ class EnhancedPPTRenderer:
             raise
     
     def render(self, slides_data: List[EnhancedSlideData]) -> io.BytesIO:
-        """渲染PPT"""
+        """渲染PPT（Add-then-Clean 策略：先添加用户页面，再删除所有原始模板页）"""
         logger.info(f"[EnhancedRenderer] 开始渲染 {len(slides_data)} 页幻灯片")
-
-        needed_slides = len(slides_data)
-        current_slides = len(self.prs.slides)
 
         for idx, slide_data in enumerate(slides_data):
             try:
                 page_type = slide_data.page_type or 'content'
-
-                if idx < current_slides:
-                    slide = self.prs.slides[idx]
-                    logger.info(f"[EnhancedRenderer] 修改第 {idx + 1} 页: {page_type}")
-                else:
-                    layout = self.get_layout_for_type(page_type)
-                    slide = self.prs.slides.add_slide(layout)
-                    logger.info(f"[EnhancedRenderer] 新增第 {idx + 1} 页: {page_type}")
+                layout = self.get_layout_for_type(page_type)
+                slide = self.prs.slides.add_slide(layout)
+                logger.info(f"[EnhancedRenderer] 新增第 {idx + 1} 页: {page_type}")
 
                 self.fill_slide_content(slide, slide_data)
             except Exception as e:
                 logger.error(f"[EnhancedRenderer] 渲染第 {idx + 1} 页失败: {e}")
                 continue
 
-        if current_slides > needed_slides:
-            for extra_idx in range(needed_slides, current_slides):
-                try:
-                    extra_slide = self.prs.slides[extra_idx]
-                    for shape in list(extra_slide.shapes):
-                        try:
-                            shape._element.getparent().remove(shape._element)
-                        except Exception:
-                            pass
-                except Exception as e:
-                    logger.debug(f"[EnhancedRenderer] 清理多余幻灯片 {extra_idx + 1} 失败: {e}")
-            logger.info(f"[EnhancedRenderer] 清理了 {current_slides - needed_slides} 张多余幻灯片内容")
-        
+        self._remove_original_template_slides()
+
         pptx_io = io.BytesIO()
         self.prs.save(pptx_io)
         pptx_io.seek(0)
-        
+
         self._cleanup_temp_files()
-        
+
         logger.info(f"[EnhancedRenderer] 渲染完成，文件大小: {len(pptx_io.getvalue())} 字节")
         return pptx_io
+
+    def _remove_original_template_slides(self):
+        """
+        删除所有原始模板幻灯片
+        
+        使用 python-pptx 内部 API (prs.slides._sldIdLst) 直接操作
+        """
+        original_count = getattr(self, 'original_slide_count', 0)
+        if original_count == 0:
+            return
+
+        removed = 0
+
+        for _ in range(original_count):
+            if len(self.prs.slides) <= 0:
+                break
+
+            try:
+                sld_id_lst = self.prs.slides._sldIdLst
+                rId = sld_id_lst[0].rId
+                self.prs.part.drop_rel(rId)
+                del sld_id_lst[0]
+                removed += 1
+            except Exception as e:
+                logger.warning(f"[EnhancedRenderer] 删除原始模板页出错: {e}")
+                break
+
+        logger.info(f"[EnhancedRenderer] 已删除 {removed} 张原始模板页")
     
     def _cleanup_temp_files(self):
         """清理临时文件"""
@@ -871,51 +880,54 @@ def render_enhanced_ppt(
 
 
 def _resolve_template_path(template_id: str, timeout: int = 30) -> Optional[str]:
-    """解析模板路径，带超时控制"""
+    """解析模板路径（支持本地文件 + Supabase 云端下载）"""
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    
+
     local_path = os.path.join(base_dir, 'data', 'templates', f"{template_id}.pptx")
     if os.path.exists(local_path):
+        logger.info(f"[EnhancedRenderer] 使用本地缓存: {local_path}")
         return local_path
-    
-    import threading
-    import concurrent.futures
-    
-    def _download_template():
-        from repository.supabase_client import get_supabase_client
-        
-        supabase = get_supabase_client()
-        response = supabase.table('user_templates').select('*').eq('id', template_id).execute()
-        
-        if response.data:
-            template_info = response.data[0]
-            storage_path = template_info.get('file_path')
-            bucket_name = template_info.get('file_bucket', 'ppt-templates')
-            
-            if storage_path:
-                file_bytes = supabase.storage.from_(bucket_name).download(storage_path)
-                
-                os.makedirs(os.path.dirname(local_path), exist_ok=True)
-                with open(local_path, 'wb') as f:
-                    f.write(file_bytes)
-                
-                return local_path
-        return None
-    
+
+    logger.info(f"[EnhancedRenderer] 本地未找到，尝试从云端下载 template_id={template_id}")
+
     try:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-            future = executor.submit(_download_template)
-            try:
-                result = future.result(timeout=timeout)
-                return result
-            except concurrent.futures.TimeoutError:
-                logger.warning(f"[EnhancedRenderer] 模板下载超时: {template_id}")
-                return None
-                
+        from repository.supabase_client import get_supabase_client
+        supabase = get_supabase_client()
+
+        response = supabase.table('user_templates').select(
+            'id, file_path, file_bucket'
+        ).eq('id', template_id).execute()
+
+        if not response.data or len(response.data) == 0:
+            logger.warning(f"[EnhancedRenderer] 数据库中未找到模板记录: {template_id}")
+            return None
+
+        template_info = response.data[0]
+        storage_path = template_info.get('file_path')
+        bucket_name = template_info.get('file_bucket', 'ppt-templates')
+
+        if not storage_path:
+            logger.warning(f"[EnhancedRenderer] 模板记录缺少 file_path: {template_info}")
+            return None
+
+        from service.storage_service import download_template_file
+
+        file_bytes = download_template_file(bucket_name, storage_path)
+
+        if not file_bytes:
+            logger.warning(f"[EnhancedRenderer] 从 Storage 下载失败: bucket={bucket_name}, path={storage_path}")
+            return None
+
+        os.makedirs(os.path.dirname(local_path), exist_ok=True)
+        with open(local_path, 'wb') as f:
+            f.write(file_bytes)
+
+        logger.info(f"[EnhancedRenderer] 模板已下载并缓存: {local_path}")
+        return local_path
+
     except Exception as e:
-        logger.error(f"[EnhancedRenderer] 下载模板失败: {e}")
-    
-    return None
+        logger.error(f"[EnhancedRenderer] 下载模板异常: {e}", exc_info=True)
+        return None
 
 
 def _dict_to_enhanced_slide(slide_dict: Dict[str, Any]) -> EnhancedSlideData:
